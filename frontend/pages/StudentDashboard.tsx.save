@@ -1,0 +1,133 @@
+                            className={`apply-btn ${hasApplied(project.id) ? 'applied' : ''}`}
+                            onClick={() => !hasApplied(project.id) && handleApply(project.id)}
+                            disabled={applying === project.id || hasApplied(project.id)}
+                            style={{ width: '100%' }}
+                          >
+                            {applying === project.id ? '⏳ Applying...' : hasApplied(project.id) ? '✓ Applied' : 'Apply Now →'}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* APPLICATIONS TAB */}
+              {tab === 'applications' && (
+                <div style={{ animation: 'fadeUp 0.4s ease' }}>
+                  <div style={{ marginBottom: '24px' }}>
+                    <h1 style={{ fontFamily: "'Syne', sans-serif", fontSize: '24px', fontWeight: 800, marginBottom: '6px' }}>My Applications</h1>
+                    <p style={{ color: '#94A3B8', fontSize: '14px' }}>Track the status of your project applications</p>
+                  </div>
+
+                  <div className="stats-row" style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: '12px', marginBottom: '24px' }}>
+                    {[
+                      { label: 'Total', value: applications.length, color: '#60B4F0' },
+                      { label: 'Shortlisted', value: applications.filter(a => a.status === 'shortlisted').length, color: '#FDB913' },
+                      { label: 'Selected', value: applications.filter(a => a.status === 'selected').length, color: '#4ADE80' },
+                      { label: 'Completed', value: applications.filter(a => a.status === 'completed').length, color: '#A78BFA' },
+                    ].map((stat) => (
+                      <div key={stat.label} style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: '14px', padding: '16px', textAlign: 'center' }}>
+                        <div style={{ fontSize: '28px', fontWeight: 800, color: stat.color, fontFamily: "'Syne', sans-serif" }}>{stat.value}</div>
+                        <div style={{ color: '#94A3B8', fontSize: '12px', fontWeight: 500, marginTop: '4px' }}>{stat.label}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {applications.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: '60px 20px', color: '#94A3B8' }}>
+                      <div style={{ fontSize: '48px', marginBottom: '16px' }}>📋</div>
+                      <p style={{ fontSize: '16px', fontWeight: 600, marginBottom: '8px', color: '#F1F5F9' }}>No applications yet</p>
+                      <p style={{ fontSize: '14px', marginBottom: '20px' }}>Browse projects and apply to get started.</p>
+                      <button onClick={() => setTab('projects')} style={{ background: 'rgba(10,110,189,0.15)', border: '1px solid rgba(10,110,189,0.3)', color: '#60B4F0', padding: '10px 20px', borderRadius: '10px', cursor: 'pointer', fontWeight: 600, fontSize: '14px', fontFamily: "'DM Sans', sans-serif" }}>
+                        Browse Projects →
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      {applications.map((app, i) => {
+                        const project = projects.find(p => p.id === app.project_id)
+                        return (
+                          <div key={app.application_id} className="dash-card" style={{ padding: '20px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', animationDelay: `${i * 0.05}s` }}>
+                            <div>
+                              <h3 style={{ fontSize: '15px', fontWeight: 600, marginBottom: '6px' }}>
+                                {project?.project_name || 'Project'}
+                              </h3>
+                              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                                {project?.sdg_focus && (
+                                  <span style={{ color: '#94A3B8', fontSize: '12px' }}>🎯 {project.sdg_focus}</span>
+                                )}
+                                {project?.location && (
+                                  <span style={{ color: '#94A3B8', fontSize: '12px' }}>📍 {project.location}</span>
+                                )}
+                                {project?.participation_type && (
+                                  <span style={{ color: project.participation_type === 'team' ? '#FDB913' : '#60B4F0', fontSize: '12px', fontWeight: 600 }}>
+                                    {project.participation_type === 'team' ? `👥 Team ${project.team_size_min}–${project.team_size_max}` : '👤 Individual'}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <span style={{ background: statusBg(app.status), border: `1px solid ${statusColor(app.status)}40`, color: statusColor(app.status), padding: '6px 14px', borderRadius: '999px', fontSize: '12px', fontWeight: 600, textTransform: 'capitalize' }}>
+                              {app.status}
+                            </span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* PROFILE TAB */}
+              {tab === 'profile' && (
+                <div style={{ animation: 'fadeUp 0.4s ease', maxWidth: '560px' }}>
+                  <div style={{ marginBottom: '24px' }}>
+                    <h1 style={{ fontFamily: "'Syne', sans-serif", fontSize: '24px', fontWeight: 800, marginBottom: '6px' }}>My Profile</h1>
+                    <p style={{ color: '#94A3B8', fontSize: '14px' }}>
+                      {profile ? 'Update your student profile' : 'Complete your profile to start applying'}
+                    </p>
+                  </div>
+
+                  <div style={{ background: 'rgba(10,110,189,0.06)', border: '1px solid rgba(10,110,189,0.15)', borderRadius: '16px', padding: '20px', marginBottom: '20px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                      <div style={{ width: '48px', height: '48px', borderRadius: '50%', background: 'linear-gradient(135deg, #0A6EBD, #0891D4)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', fontWeight: 700, color: 'white' }}>
+                        {user?.first_name?.charAt(0)?.toUpperCase()}
+                      </div>
+                      <div>
+                        <p style={{ fontWeight: 700, fontSize: '16px' }}>{user?.first_name} {user?.last_name}</p>
+                        <p style={{ color: '#94A3B8', fontSize: '13px' }}>{user?.email}</p>
+                        {profile && <p style={{ color: '#4ADE80', fontSize: '12px', marginTop: '2px' }}>✓ Profile complete</p>}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '16px', padding: '24px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                      <div>
+                        <label style={{ color: '#94A3B8', fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '6px' }}>Display Name</label>
+                        <input className="profile-input" placeholder="How you appear to NGOs" value={profileForm.display_name} onChange={(e) => setProfileForm({ ...profileForm, display_name: e.target.value })} />
+                      </div>
+                      <div>
+                        <label style={{ color: '#94A3B8', fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '6px' }}>Profile Slug</label>
+                        <input className="profile-input" placeholder="your-unique-slug" value={profileForm.profile_slug} onChange={(e) => setProfileForm({ ...profileForm, profile_slug: e.target.value.toLowerCase().replace(/\s/g, '-') })} />
+                      </div>
+                      <div>
+                        <label style={{ color: '#94A3B8', fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '6px' }}>Bio</label>
+                        <textarea className="profile-input" placeholder="Tell NGOs about yourself, your skills and interests..." value={profileForm.bio} onChange={(e) => setProfileForm({ ...profileForm, bio: e.target.value })} rows={4} style={{ resize: 'vertical' }} />
+                      </div>
+                      <button className="save-btn" onClick={handleSaveProfile} disabled={savingProfile}>
+                        {savingProfile ? '⏳ Saving...' : profile ? 'Update Profile' : 'Create Profile →'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export default StudentDashboard
