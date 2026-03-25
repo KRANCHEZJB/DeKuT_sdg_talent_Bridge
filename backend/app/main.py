@@ -3,7 +3,7 @@ import re
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import FastAPI, Depends, HTTPException, status, Request
+from fastapi import FastAPI, Depends, HTTPException, status, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -68,10 +68,37 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ─── SDG ENUM ─────────────────────────────────────────────────────────────────
+VALID_SDGS = [
+    "SDG 1 — No Poverty",
+    "SDG 2 — Zero Hunger",
+    "SDG 3 — Good Health and Well-being",
+    "SDG 4 — Quality Education",
+    "SDG 5 — Gender Equality",
+    "SDG 6 — Clean Water and Sanitation",
+    "SDG 7 — Affordable and Clean Energy",
+    "SDG 8 — Decent Work and Economic Growth",
+    "SDG 9 — Industry, Innovation and Infrastructure",
+    "SDG 10 — Reduced Inequalities",
+    "SDG 11 — Sustainable Cities and Communities",
+    "SDG 12 — Responsible Consumption and Production",
+    "SDG 13 — Climate Action",
+    "SDG 14 — Life Below Water",
+    "SDG 15 — Life on Land",
+    "SDG 16 — Peace, Justice and Strong Institutions",
+    "SDG 17 — Partnerships for the Goals",
+]
+
+# ─── REGISTRATION NUMBER PATTERN ──────────────────────────────────────────────
+REG_NUMBER_PATTERN = re.compile(r'^[A-Z]\d{3}/\d{3,4}/\d{4}$')
+
 
 # ─── HELPERS ──────────────────────────────────────────────────────────────────
 
-def create_notification(db: Session, user_id, type: str, title: str, message: str, link: str = None):
+def create_notification(
+    db: Session, user_id, type: str,
+    title: str, message: str, link: str = None
+):
     notif = Notification(
         user_id=user_id,
         type=type,
@@ -82,6 +109,33 @@ def create_notification(db: Session, user_id, type: str, title: str, message: st
     db.add(notif)
 
 
+def write_audit_log(
+    db: Session,
+    admin_id,
+    action: str,
+    target_type: str,
+    target_id,
+    old_status: str = None,
+    new_status: str = None,
+    notes: str = None
+):
+    db.execute(text("""
+        INSERT INTO admin_audit_log
+            (admin_id, action, target_type, target_id, old_status, new_status, notes)
+        VALUES
+            (:admin_id, :action, :target_type, :target_id,
+             :old_status, :new_status, :notes)
+    """), {
+        "admin_id":    str(admin_id),
+        "action":      action,
+        "target_type": target_type,
+        "target_id":   str(target_id),
+        "old_status":  old_status,
+        "new_status":  new_status,
+        "notes":       notes
+    })
+
+
 def generate_slug(name: str) -> str:
     slug = name.lower().strip()
     slug = re.sub(r'[^a-z0-9\s-]', '', slug)
@@ -89,7 +143,9 @@ def generate_slug(name: str) -> str:
     return slug
 
 
-def match_students_to_project(project: Project, db: Session) -> List[StudentProfile]:
+def match_students_to_project(
+    project: Project, db: Session
+) -> List[StudentProfile]:
     students = db.query(StudentProfile).filter(
         StudentProfile.engagement_status == "active",
         StudentProfile.is_verified == True
@@ -113,32 +169,51 @@ def match_students_to_project(project: Project, db: Session) -> List[StudentProf
 @app.get("/")
 def root():
     return {
-        "system": "DeKUT SDG Talent Bridge",
-        "version": "2.0.0",
+        "system":      "DeKUT SDG Talent Bridge",
+        "version":     "2.0.0",
         "institution": "Dedan Kimathi University of Technology",
-        "status": "running"
+        "status":      "running"
     }
 
 
+@app.get("/sdgs")
+def get_sdgs():
+    """Return all valid SDG options for frontend dropdowns."""
+    return {"sdgs": VALID_SDGS}
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
-# AUTH ENDPOINTS
+# AUTH
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @app.post("/auth/register", status_code=status.HTTP_201_CREATED)
 @limiter.limit("3/minute")
-def register(request: Request, data: UserRegister, db: Session = Depends(get_db)):
+def register(
+    request: Request,
+    data: UserRegister,
+    db: Session = Depends(get_db)
+):
     if data.role == "student":
         validate_student_email(data.email)
 
     valid_roles = {"student", "ngo"}
     if data.role not in valid_roles:
-        raise HTTPException(status_code=400, detail="Role must be student or ngo")
+        raise HTTPException(
+            status_code=400,
+            detail="Role must be student or ngo"
+        )
 
     if db.query(User).filter(User.email == data.email.lower()).first():
-        raise HTTPException(status_code=400, detail="An account with this email already exists")
+        raise HTTPException(
+            status_code=400,
+            detail="An account with this email already exists"
+        )
 
     if len(data.password) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+        raise HTTPException(
+            status_code=400,
+            detail="Password must be at least 8 characters"
+        )
 
     user = User(
         email=data.email.lower(),
@@ -154,10 +229,19 @@ def register(request: Request, data: UserRegister, db: Session = Depends(get_db)
 
 @app.post("/auth/login", response_model=TokenResponse)
 @limiter.limit("5/minute")
-def login(request: Request, data: UserLogin, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == data.email.lower()).first()
+def login(
+    request: Request,
+    data: UserLogin,
+    db: Session = Depends(get_db)
+):
+    user = db.query(User).filter(
+        User.email == data.email.lower()
+    ).first()
     if not user or not verify_password(data.password, user.hashed_password):
-        raise HTTPException(status_code=400, detail="Invalid email or password")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid email or password"
+        )
 
     user.last_login = datetime.utcnow()
     db.commit()
@@ -165,10 +249,10 @@ def login(request: Request, data: UserLogin, db: Session = Depends(get_db)):
     token = create_access_token({"sub": str(user.id)})
     return {
         "access_token": token,
-        "token_type": "bearer",
-        "role": user.role,
-        "first_name": user.first_name,
-        "last_name": user.last_name
+        "token_type":   "bearer",
+        "role":         user.role,
+        "first_name":   user.first_name,
+        "last_name":    user.last_name
     }
 
 
@@ -178,7 +262,7 @@ def get_me(current_user: User = Depends(get_current_user)):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# STUDENT PROFILE ENDPOINTS
+# STUDENT PROFILE
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @app.post("/students/profile", response_model=StudentProfileRead)
@@ -191,7 +275,7 @@ def create_or_update_student_profile(
         StudentProfile.user_id == current_user.id
     ).first()
 
-    # Sanitize all string inputs
+    # Sanitize inputs
     display_name    = clean(data.display_name)
     school          = clean(data.school)
     course          = clean(data.course)
@@ -205,7 +289,13 @@ def create_or_update_student_profile(
         StudentProfile.profile_slug == slug
     ).first()
     if existing and (not profile or existing.id != profile.id):
-        raise HTTPException(status_code=400, detail="Profile slug already taken")
+        raise HTTPException(
+            status_code=400,
+            detail="Profile slug already taken"
+        )
+
+    # Auto pre-verification logic
+    auto_verified = bool(REG_NUMBER_PATTERN.match(data.registration_number))
 
     if profile:
         profile.display_name             = display_name
@@ -222,7 +312,10 @@ def create_or_update_student_profile(
         if db.query(StudentProfile).filter(
             StudentProfile.registration_number == data.registration_number
         ).first():
-            raise HTTPException(status_code=400, detail="Registration number already registered")
+            raise HTTPException(
+                status_code=400,
+                detail="Registration number already registered"
+            )
 
         profile = StudentProfile(
             user_id=current_user.id,
@@ -238,6 +331,20 @@ def create_or_update_student_profile(
             skills=skills
         )
         db.add(profile)
+
+        # Apply auto pre-verification
+        if auto_verified:
+            profile.is_verified       = True
+            profile.engagement_status = "active"
+            profile.verified_at       = datetime.utcnow()
+            db.flush()
+            create_notification(
+                db, current_user.id,
+                "profile_verified",
+                "Profile Verified",
+                "Your profile has been automatically verified. You can now apply to projects.",
+                "/student"
+            )
 
     db.commit()
     db.refresh(profile)
@@ -264,6 +371,8 @@ def get_student_public_profile(slug: str, db: Session = Depends(get_db)):
     ).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Student not found")
+    if hasattr(profile, 'is_profile_public') and not profile.is_profile_public:
+        raise HTTPException(status_code=404, detail="Student not found")
     return profile
 
 
@@ -276,7 +385,7 @@ def list_students(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NGO PROFILE ENDPOINTS
+# NGO PROFILE
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @app.post("/organizations/profile", response_model=NgoProfileRead)
@@ -289,7 +398,6 @@ def create_or_update_ngo_profile(
         NgoProfile.user_id == current_user.id
     ).first()
 
-    # Sanitize inputs
     organization_name = clean(data.organization_name)
     mission_statement = clean(data.mission_statement)
     country           = clean(data.country)
@@ -300,7 +408,10 @@ def create_or_update_ngo_profile(
         NgoProfile.organization_slug == slug
     ).first()
     if existing and (not profile or existing.id != profile.id):
-        raise HTTPException(status_code=400, detail="Organisation slug already taken")
+        raise HTTPException(
+            status_code=400,
+            detail="Organisation slug already taken"
+        )
 
     if profile:
         profile.organization_name = organization_name
@@ -352,7 +463,7 @@ def list_organizations(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PROJECT ENDPOINTS
+# PROJECTS
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @app.post("/projects", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)
@@ -365,21 +476,31 @@ def create_project(
         NgoProfile.user_id == current_user.id
     ).first()
 
+    # SDG validation
+    if data.sdg_focus not in VALID_SDGS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid SDG. Must be one of the 17 UN SDGs. Use GET /sdgs for the full list."
+        )
+
     if data.participation_type == "team":
         if data.team_size_min < 2 or data.team_size_max > 5:
-            raise HTTPException(status_code=400, detail="Team size must be between 2 and 5")
+            raise HTTPException(
+                status_code=400,
+                detail="Team size must be between 2 and 5"
+            )
         if data.team_size_min > data.team_size_max:
-            raise HTTPException(status_code=400, detail="Minimum team size cannot exceed maximum")
+            raise HTTPException(
+                status_code=400,
+                detail="Minimum team size cannot exceed maximum"
+            )
 
-    # Sanitize inputs
     project_name = clean(data.project_name)
     description  = clean(data.description)
-    sdg_focus    = clean(data.sdg_focus)
     location     = clean(data.location)
     skills       = [clean(s) for s in (data.skills_required or [])]
 
     slug = data.project_slug or generate_slug(project_name)
-
     base_slug = slug
     counter = 1
     while db.query(Project).filter(Project.project_slug == slug).first():
@@ -391,7 +512,7 @@ def create_project(
         project_name=project_name,
         project_slug=slug,
         description=description,
-        sdg_focus=sdg_focus,
+        sdg_focus=data.sdg_focus,
         skills_required=skills,
         location=location,
         is_remote=data.is_remote,
@@ -411,14 +532,17 @@ def create_project(
 
 @app.get("/projects", response_model=List[ProjectRead])
 def list_projects(
-    skill: Optional[str] = None,
-    type: Optional[str] = None,
+    skill:  Optional[str] = None,
+    type:   Optional[str] = None,
+    limit:  int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db)
 ):
     query = db.query(Project).filter(Project.project_status == "open")
     if type:
         query = query.filter(Project.participation_type == type)
-    projects = query.order_by(Project.created_at.desc()).all()
+    query = query.order_by(Project.created_at.desc())
+    projects = query.offset(offset).limit(limit).all()
     if skill:
         skill_lower = skill.lower()
         projects = [
@@ -452,12 +576,14 @@ def get_project(project_id: uuid.UUID, db: Session = Depends(get_db)):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# APPLICATION ENDPOINTS
+# APPLICATIONS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@app.post("/projects/{project_id}/apply",
-          response_model=ApplicationRead,
-          status_code=status.HTTP_201_CREATED)
+@app.post(
+    "/projects/{project_id}/apply",
+    response_model=ApplicationRead,
+    status_code=status.HTTP_201_CREATED
+)
 def apply_to_project(
     project_id: uuid.UUID,
     current_user: User = Depends(require_verified_student),
@@ -467,7 +593,10 @@ def apply_to_project(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     if project.project_status != "open":
-        raise HTTPException(status_code=400, detail="Project is not open for applications")
+        raise HTTPException(
+            status_code=400,
+            detail="Project is not open for applications"
+        )
 
     student = db.query(StudentProfile).filter(
         StudentProfile.user_id == current_user.id
@@ -478,7 +607,10 @@ def apply_to_project(
         Application.student_id == student.id
     ).first()
     if existing:
-        raise HTTPException(status_code=409, detail="You have already applied to this project")
+        raise HTTPException(
+            status_code=409,
+            detail="You have already applied to this project"
+        )
 
     application = Application(
         project_id=project_id,
@@ -492,7 +624,7 @@ def apply_to_project(
         "application_submitted",
         "Application Submitted",
         f"Your application to '{project.project_name}' has been submitted.",
-        "/student"
+        "/student?tab=applications"
     )
 
     db.commit()
@@ -515,7 +647,10 @@ def get_my_applications(
     ).order_by(Application.applied_at.desc()).all()
 
 
-@app.get("/projects/{project_id}/applications", response_model=List[ApplicationRead])
+@app.get(
+    "/projects/{project_id}/applications",
+    response_model=List[ApplicationRead]
+)
 def get_project_applications(
     project_id: uuid.UUID,
     current_user: User = Depends(require_ngo),
@@ -535,7 +670,10 @@ def get_project_applications(
     ).all()
 
 
-@app.patch("/applications/{application_id}/status", response_model=ApplicationRead)
+@app.patch(
+    "/applications/{application_id}/status",
+    response_model=ApplicationRead
+)
 def update_application_status(
     application_id: uuid.UUID,
     data: ApplicationStatusUpdate,
@@ -564,7 +702,7 @@ def update_application_status(
         "application_status_update",
         f"Application {data.status.capitalize()}",
         f"Your application has been {data.status}.",
-        "/student"
+        "/student?tab=applications"
     )
 
     db.commit()
@@ -576,14 +714,23 @@ def update_application_status(
 # PERSONAL PROJECTS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@app.post("/personal-projects",
-          response_model=PersonalProjectRead,
-          status_code=status.HTTP_201_CREATED)
+@app.post(
+    "/personal-projects",
+    response_model=PersonalProjectRead,
+    status_code=status.HTTP_201_CREATED
+)
 def submit_personal_project(
     data: PersonalProjectCreate,
     current_user: User = Depends(require_verified_student),
     db: Session = Depends(get_db)
 ):
+    # SDG validation
+    if data.sdg_focus not in VALID_SDGS:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid SDG. Use GET /sdgs for the full list."
+        )
+
     student = db.query(StudentProfile).filter(
         StudentProfile.user_id == current_user.id
     ).first()
@@ -593,7 +740,7 @@ def submit_personal_project(
         title=clean(data.title),
         problem_statement=clean(data.problem_statement),
         solution_description=clean(data.solution_description),
-        sdg_focus=clean(data.sdg_focus),
+        sdg_focus=data.sdg_focus,
         technologies=[clean(t) for t in (data.technologies or [])],
         outcome=clean(data.outcome),
         evidence_urls=data.evidence_urls or [],
@@ -698,9 +845,11 @@ def get_my_certificates(
 # RECOMMENDATION LETTERS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@app.post("/letters/request",
-          response_model=RecommendationRequestRead,
-          status_code=status.HTTP_201_CREATED)
+@app.post(
+    "/letters/request",
+    response_model=RecommendationRequestRead,
+    status_code=status.HTTP_201_CREATED
+)
 def request_recommendation_letter(
     data: RecommendationRequestCreate,
     current_user: User = Depends(require_verified_student),
@@ -736,7 +885,7 @@ def get_my_letter_requests(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# ADMIN ENDPOINTS
+# ADMIN
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @app.get("/admin/dashboard", response_model=AdminDashboardStats)
@@ -746,14 +895,19 @@ def admin_dashboard(
 ):
     return {
         "total_students":       db.query(StudentProfile).count(),
-        "pending_verification": db.query(StudentProfile).filter(StudentProfile.is_verified == False).count(),
+        "pending_verification": db.query(StudentProfile).filter(
+            StudentProfile.is_verified == False).count(),
         "total_organizations":  db.query(NgoProfile).count(),
-        "pending_approval":     db.query(NgoProfile).filter(NgoProfile.approval_status == "pending").count(),
+        "pending_approval":     db.query(NgoProfile).filter(
+            NgoProfile.approval_status == "pending").count(),
         "total_projects":       db.query(Project).count(),
-        "open_projects":        db.query(Project).filter(Project.project_status == "open").count(),
+        "open_projects":        db.query(Project).filter(
+            Project.project_status == "open").count(),
         "total_applications":   db.query(Application).count(),
-        "pending_completions":  db.query(Application).filter(Application.status == "completed").count(),
-        "open_disputes":        db.query(Dispute).filter(Dispute.status == "open").count(),
+        "pending_completions":  db.query(Application).filter(
+            Application.status == "completed").count(),
+        "open_disputes":        db.query(Dispute).filter(
+            Dispute.status == "open").count(),
     }
 
 
@@ -779,6 +933,14 @@ def verify_student(
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
 
+    # Status pre-check
+    if student.is_verified:
+        raise HTTPException(
+            status_code=400,
+            detail="Student is already verified"
+        )
+
+    old_status = "pending_verification"
     student.is_verified       = True
     student.engagement_status = "active"
     student.verified_by       = current_user.id
@@ -791,8 +953,57 @@ def verify_student(
         "Your student profile has been verified by DeKUT admin. You can now apply to projects.",
         "/student"
     )
+
+    write_audit_log(
+        db,
+        admin_id=current_user.id,
+        action="verify_student",
+        target_type="student_profile",
+        target_id=student_id,
+        old_status=old_status,
+        new_status="active"
+    )
+
     db.commit()
     return {"status": "verified", "student_id": str(student_id)}
+
+
+@app.patch("/students/{student_id}/bulk-verify")
+def bulk_verify_students(
+    student_ids: List[uuid.UUID],
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    verified_count = 0
+    for student_id in student_ids:
+        student = db.query(StudentProfile).filter(
+            StudentProfile.id == student_id,
+            StudentProfile.is_verified == False
+        ).first()
+        if student:
+            student.is_verified       = True
+            student.engagement_status = "active"
+            student.verified_by       = current_user.id
+            student.verified_at       = datetime.utcnow()
+            create_notification(
+                db, student.user_id,
+                "profile_verified",
+                "Profile Verified",
+                "Your student profile has been verified by DeKUT admin.",
+                "/student"
+            )
+            write_audit_log(
+                db,
+                admin_id=current_user.id,
+                action="bulk_verify_student",
+                target_type="student_profile",
+                target_id=student_id,
+                old_status="pending_verification",
+                new_status="active"
+            )
+            verified_count += 1
+    db.commit()
+    return {"verified": verified_count}
 
 
 @app.get("/admin/queues/organizations", response_model=List[NgoProfileRead])
@@ -815,6 +1026,15 @@ def approve_organization(
     org = db.query(NgoProfile).filter(NgoProfile.id == org_id).first()
     if not org:
         raise HTTPException(status_code=404, detail="Organisation not found")
+
+    # Status pre-check
+    if data.action == "approve" and org.is_approved:
+        raise HTTPException(
+            status_code=400,
+            detail="Organisation is already approved"
+        )
+
+    old_status = org.approval_status
 
     if data.action == "approve":
         org.is_approved      = True
@@ -843,7 +1063,21 @@ def approve_organization(
     elif data.action == "more_info":
         org.approval_status = "more_info_required"
     else:
-        raise HTTPException(status_code=400, detail="Action must be approve, reject, or more_info")
+        raise HTTPException(
+            status_code=400,
+            detail="Action must be approve, reject, or more_info"
+        )
+
+    write_audit_log(
+        db,
+        admin_id=current_user.id,
+        action=f"org_{data.action}",
+        target_type="ngo_profile",
+        target_id=org_id,
+        old_status=old_status,
+        new_status=org.approval_status,
+        notes=data.rejection_reason
+    )
 
     db.commit()
     return {"status": data.action, "org_id": str(org_id)}
@@ -870,6 +1104,15 @@ def approve_project(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    # Status pre-check
+    if data.action == "approve" and project.project_status == "open":
+        raise HTTPException(
+            status_code=400,
+            detail="Project is already approved and open"
+        )
+
+    old_status = project.project_status
+
     if data.action == "approve":
         project.project_status = "open"
         project.approved_by    = current_user.id
@@ -881,7 +1124,7 @@ def approve_project(
                 "new_project",
                 f"New Project: {project.project_name}",
                 "A new project matching your skills has been posted.",
-                "/student"
+                "/student?tab=browse"
             )
     elif data.action == "reject":
         project.project_status   = "rejected"
@@ -891,13 +1134,30 @@ def approve_project(
         project.approval_condition = data.condition_text
         project.bootcamp_required  = True
     else:
-        raise HTTPException(status_code=400, detail="Action must be approve, reject, or conditional")
+        raise HTTPException(
+            status_code=400,
+            detail="Action must be approve, reject, or conditional"
+        )
+
+    write_audit_log(
+        db,
+        admin_id=current_user.id,
+        action=f"project_{data.action}",
+        target_type="project",
+        target_id=project_id,
+        old_status=old_status,
+        new_status=project.project_status,
+        notes=data.rejection_reason or data.condition_text
+    )
 
     db.commit()
     return {"status": data.action, "project_id": str(project_id)}
 
 
-@app.get("/admin/queues/personal-projects", response_model=List[PersonalProjectRead])
+@app.get(
+    "/admin/queues/personal-projects",
+    response_model=List[PersonalProjectRead]
+)
 def admin_ip_queue(
     current_user: User = Depends(require_admin),
     db: Session = Depends(get_db)
@@ -919,12 +1179,16 @@ def record_ip(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     if project.status != "submitted":
-        raise HTTPException(status_code=400, detail="Project must be in submitted status")
+        raise HTTPException(
+            status_code=400,
+            detail="Project must be in submitted status"
+        )
 
     year   = datetime.utcnow().year
     seq    = db.execute(text("SELECT nextval('ip_reference_seq')")).scalar()
     ip_ref = f"DKUT-IP-{year}-{seq:04d}"
 
+    old_status         = project.status
     project.ip_reference   = ip_ref
     project.ip_recorded_at = datetime.utcnow()
     project.ip_recorded_by = current_user.id
@@ -935,8 +1199,20 @@ def record_ip(
         "ip_recorded",
         "Project IP Recorded",
         f"Your project '{project.title}' has been IP recorded. Reference: {ip_ref}",
-        "/student"
+        "/student?tab=personal"
     )
+
+    write_audit_log(
+        db,
+        admin_id=current_user.id,
+        action="record_ip",
+        target_type="personal_project",
+        target_id=project_id,
+        old_status=old_status,
+        new_status="ip_recorded",
+        notes=ip_ref
+    )
+
     db.commit()
     return {"status": "ip_recorded", "ip_reference": ip_ref}
 
@@ -953,14 +1229,27 @@ def approve_showcase(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    old_status     = project.status
     project.status = "showcase_approved"
+
     create_notification(
         db, project.student.user_id,
         "showcase_approved",
         "Project on Showcase",
         f"Your project '{project.title}' is now live on the DeKUT innovation showcase.",
-        "/student"
+        "/student?tab=personal"
     )
+
+    write_audit_log(
+        db,
+        admin_id=current_user.id,
+        action="approve_showcase",
+        target_type="personal_project",
+        target_id=project_id,
+        old_status=old_status,
+        new_status="showcase_approved"
+    )
+
     db.commit()
     return {"status": "showcase_approved"}
 
@@ -972,14 +1261,40 @@ def admin_impact_dashboard(
 ):
     return {
         "total_students":         db.query(StudentProfile).count(),
-        "verified_students":      db.query(StudentProfile).filter(StudentProfile.is_verified == True).count(),
+        "verified_students":      db.query(StudentProfile).filter(
+            StudentProfile.is_verified == True).count(),
         "total_organizations":    db.query(NgoProfile).count(),
-        "approved_organizations": db.query(NgoProfile).filter(NgoProfile.is_approved == True).count(),
+        "approved_organizations": db.query(NgoProfile).filter(
+            NgoProfile.is_approved == True).count(),
         "total_projects":         db.query(Project).count(),
-        "completed_projects":     db.query(Project).filter(Project.project_status == "completed").count(),
+        "completed_projects":     db.query(Project).filter(
+            Project.project_status == "completed").count(),
         "total_applications":     db.query(Application).count(),
-        "officially_complete":    db.query(Application).filter(Application.status == "officially_complete").count(),
+        "officially_complete":    db.query(Application).filter(
+            Application.status == "officially_complete").count(),
         "personal_projects":      db.query(PersonalProject).count(),
-        "ip_recorded":            db.query(PersonalProject).filter(PersonalProject.ip_reference != None).count(),
+        "ip_recorded":            db.query(PersonalProject).filter(
+            PersonalProject.ip_reference != None).count(),
         "award_categories":       db.query(AwardCategory).count(),
     }
+
+
+@app.get("/admin/audit-log")
+def get_audit_log(
+    current_user: User = Depends(require_admin),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db)
+):
+    result = db.execute(text("""
+        SELECT
+            a.id, a.action, a.target_type, a.target_id,
+            a.old_status, a.new_status, a.notes, a.created_at,
+            u.first_name || ' ' || u.last_name AS admin_name,
+            u.role AS admin_role
+        FROM admin_audit_log a
+        JOIN users u ON a.admin_id = u.id
+        ORDER BY a.created_at DESC
+        LIMIT :limit
+    """), {"limit": limit}).fetchall()
+
+    return {"logs": [dict(row._mapping) for row in result]}
