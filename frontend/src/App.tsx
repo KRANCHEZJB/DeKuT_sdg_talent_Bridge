@@ -6,6 +6,7 @@ import LandingPage from './pages/LandingPage'
 import AuthPage from './pages/AuthPage'
 import StudentDashboard from './pages/StudentDashboard'
 import NgoDashboard from './pages/NgoDashboard'
+import AdminDashboard from './pages/AdminDashboard'
 
 // ─── PROTECTED ROUTE ──────────────────────────────────────────────────────────
 interface ProtectedRouteProps {
@@ -18,14 +19,14 @@ function ProtectedRoute({ children, roles }: ProtectedRouteProps) {
 
   if (loading) return (
     <div style={{
-      display: 'flex',
-      alignItems: 'center',
+      display:        'flex',
+      alignItems:     'center',
       justifyContent: 'center',
-      height: '100vh',
-      background: '#0a0a0f',
-      color: '#f1f5f9',
-      fontFamily: 'Inter, sans-serif',
-      fontSize: '16px',
+      height:         '100vh',
+      background:     '#060D1F',
+      color:          '#F1F5F9',
+      fontFamily:     'Inter, sans-serif',
+      fontSize:       '16px',
     }}>
       Loading...
     </div>
@@ -88,13 +89,7 @@ function App() {
         element={
           <ProtectedRoute roles={['admin', 'super_admin']}>
             <NotificationProvider>
-              <div style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                height: '100vh', background: '#0a0a0f', color: '#f1f5f9',
-                fontFamily: 'Inter, sans-serif',
-              }}>
-                Admin Dashboard — Coming in Phase D
-              </div>
+              <AdminDashboard />
             </NotificationProvider>
           </ProtectedRoute>
         }
