@@ -17,7 +17,10 @@ from app.models import (
     PersonalProject, Notification, Certificate, RecommendationRequest,
     ProjectOutcome, StudentReflection, Bootcamp, BootcampAttendance,
     Dispute, AdoptionRequest, StudentReceipt, ReimbursementObligation,
-    AwardCategory, Award
+    AwardCategory, Award, WorkSubmission,
+    MessageThread, Message,
+    Certificate,
+    Bootcamp, AwardCategory, Award
 )
 from app.schemas import (
     UserRegister, UserLogin, TokenResponse, UserRead,
@@ -36,7 +39,11 @@ from app.schemas import (
     AdoptionRequestCreate, AdoptionRequestRead,
     DisputeCreate, DisputeRead,
     FundingDeclarationCreate, ReceiptCreate,
-    BootcampCreate, BootcampRead
+    BootcampCreate, BootcampRead,
+    MessageThreadCreate, MessageThreadRead, MessageCreate, MessageRead,
+    BootcampCreate, BootcampRead,
+    AwardCategoryCreate, AwardCategoryRead, AwardCreate, AwardRead,
+    WorkSubmissionCreate, WorkSubmissionRead
 )
 from app.auth import (
     hash_password, verify_password, create_access_token,
@@ -62,7 +69,11 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:3000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -178,8 +189,23 @@ def root():
 
 @app.get("/sdgs")
 def get_sdgs():
-    """Return all valid SDG options for frontend dropdowns."""
     return {"sdgs": VALID_SDGS}
+
+
+# ─── PUBLIC STATS (no auth required) ─────────────────────────────────────────
+
+@app.get("/stats")
+def get_public_stats(db: Session = Depends(get_db)):
+    return {
+        "total_students":      db.query(StudentProfile).count(),
+        "verified_students":   db.query(StudentProfile).filter(StudentProfile.is_verified == True).count(),
+        "total_organizations": db.query(NgoProfile).count(),
+        "approved_orgs":       db.query(NgoProfile).filter(NgoProfile.is_approved == True).count(),
+        "total_projects":      db.query(Project).count(),
+        "open_projects":       db.query(Project).filter(Project.project_status == "open").count(),
+        "total_applications":  db.query(Application).count(),
+    }
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -198,22 +224,13 @@ def register(
 
     valid_roles = {"student", "ngo"}
     if data.role not in valid_roles:
-        raise HTTPException(
-            status_code=400,
-            detail="Role must be student or ngo"
-        )
+        raise HTTPException(status_code=400, detail="Role must be student or ngo")
 
     if db.query(User).filter(User.email == data.email.lower()).first():
-        raise HTTPException(
-            status_code=400,
-            detail="An account with this email already exists"
-        )
+        raise HTTPException(status_code=400, detail="An account with this email already exists")
 
     if len(data.password) < 8:
-        raise HTTPException(
-            status_code=400,
-            detail="Password must be at least 8 characters"
-        )
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
 
     user = User(
         email=data.email.lower(),
@@ -234,14 +251,9 @@ def login(
     data: UserLogin,
     db: Session = Depends(get_db)
 ):
-    user = db.query(User).filter(
-        User.email == data.email.lower()
-    ).first()
+    user = db.query(User).filter(User.email == data.email.lower()).first()
     if not user or not verify_password(data.password, user.hashed_password):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid email or password"
-        )
+        raise HTTPException(status_code=400, detail="Invalid email or password")
 
     user.last_login = datetime.utcnow()
     db.commit()
@@ -275,7 +287,6 @@ def create_or_update_student_profile(
         StudentProfile.user_id == current_user.id
     ).first()
 
-    # Sanitize inputs
     display_name    = clean(data.display_name)
     school          = clean(data.school)
     course          = clean(data.course)
@@ -289,12 +300,8 @@ def create_or_update_student_profile(
         StudentProfile.profile_slug == slug
     ).first()
     if existing and (not profile or existing.id != profile.id):
-        raise HTTPException(
-            status_code=400,
-            detail="Profile slug already taken"
-        )
+        raise HTTPException(status_code=400, detail="Profile slug already taken")
 
-    # Auto pre-verification logic
     auto_verified = bool(REG_NUMBER_PATTERN.match(data.registration_number))
 
     if profile:
@@ -312,10 +319,7 @@ def create_or_update_student_profile(
         if db.query(StudentProfile).filter(
             StudentProfile.registration_number == data.registration_number
         ).first():
-            raise HTTPException(
-                status_code=400,
-                detail="Registration number already registered"
-            )
+            raise HTTPException(status_code=400, detail="Registration number already registered")
 
         profile = StudentProfile(
             user_id=current_user.id,
@@ -332,7 +336,6 @@ def create_or_update_student_profile(
         )
         db.add(profile)
 
-        # Apply auto pre-verification
         if auto_verified:
             profile.is_verified       = True
             profile.engagement_status = "active"
@@ -408,10 +411,7 @@ def create_or_update_ngo_profile(
         NgoProfile.organization_slug == slug
     ).first()
     if existing and (not profile or existing.id != profile.id):
-        raise HTTPException(
-            status_code=400,
-            detail="Organisation slug already taken"
-        )
+        raise HTTPException(status_code=400, detail="Organisation slug already taken")
 
     if profile:
         profile.organization_name = organization_name
@@ -476,24 +476,17 @@ def create_project(
         NgoProfile.user_id == current_user.id
     ).first()
 
-    # SDG validation
     if data.sdg_focus not in VALID_SDGS:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid SDG. Must be one of the 17 UN SDGs. Use GET /sdgs for the full list."
+            detail="Invalid SDG. Must be one of the 17 UN SDGs. Use GET /sdgs for the full list."
         )
 
     if data.participation_type == "team":
         if data.team_size_min < 2 or data.team_size_max > 5:
-            raise HTTPException(
-                status_code=400,
-                detail="Team size must be between 2 and 5"
-            )
+            raise HTTPException(status_code=400, detail="Team size must be between 2 and 5")
         if data.team_size_min > data.team_size_max:
-            raise HTTPException(
-                status_code=400,
-                detail="Minimum team size cannot exceed maximum"
-            )
+            raise HTTPException(status_code=400, detail="Minimum team size cannot exceed maximum")
 
     project_name = clean(data.project_name)
     description  = clean(data.description)
@@ -593,24 +586,28 @@ def apply_to_project(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     if project.project_status != "open":
-        raise HTTPException(
-            status_code=400,
-            detail="Project is not open for applications"
-        )
+        raise HTTPException(status_code=400, detail="Project is not open for applications")
 
     student = db.query(StudentProfile).filter(
         StudentProfile.user_id == current_user.id
     ).first()
 
+    if project.bootcamp_required:
+        bootcamp = db.query(Bootcamp).filter(
+            Bootcamp.student_id == student.id,
+            Bootcamp.admin_verified == True
+        ).first()
+        if not bootcamp:
+            raise HTTPException(
+                status_code=403,
+                detail="This project requires bootcamp attendance. You must attend and be verified at a bootcamp before applying."
+            )
     existing = db.query(Application).filter(
         Application.project_id == project_id,
         Application.student_id == student.id
     ).first()
     if existing:
-        raise HTTPException(
-            status_code=409,
-            detail="You have already applied to this project"
-        )
+        raise HTTPException(status_code=409, detail="You have already applied to this project")
 
     application = Application(
         project_id=project_id,
@@ -696,7 +693,6 @@ def update_application_status(
     application.status = data.status
     if data.status == "selected":
         application.selected_at = datetime.utcnow()
-
     create_notification(
         db, application.student.user_id,
         "application_status_update",
@@ -708,6 +704,119 @@ def update_application_status(
     db.commit()
     db.refresh(application)
     return application
+# ═══════════════════════════════════════════════════════════════════════════════
+# WORK SUBMISSIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+@app.post("/applications/{application_id}/submit-work", response_model=WorkSubmissionRead)
+def submit_work(application_id: uuid.UUID, data: WorkSubmissionCreate, current_user: User = Depends(require_student), db: Session = Depends(get_db)):
+    student = db.query(StudentProfile).filter(StudentProfile.user_id == current_user.id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student profile not found")
+    application = db.query(Application).filter(Application.application_id == application_id, Application.student_id == student.id).first()
+    if not application:
+        raise HTTPException(status_code=404, detail="Application not found")
+    if application.status not in ("selected", "revision_requested"):
+        raise HTTPException(status_code=400, detail="Can only submit work for selected applications or when revision was requested")
+    existing = db.query(WorkSubmission).filter(WorkSubmission.application_id == application_id).first()
+    if existing:
+        existing.description = data.description
+        existing.deliverable_url = data.deliverable_url
+        existing.hours_worked = data.hours_worked
+        existing.submitted_at = datetime.utcnow()
+        existing.ngo_feedback = None
+        application.status = "work_submitted"
+        db.commit()
+        db.refresh(existing)
+        return existing
+    submission = WorkSubmission(application_id=application_id, student_id=student.id, description=data.description, deliverable_url=data.deliverable_url, hours_worked=data.hours_worked)
+    db.add(submission)
+    application.status = "work_submitted"
+    ngo_profile = db.query(NgoProfile).filter(NgoProfile.id == db.query(Project).filter(Project.id == application.project_id).first().ngo_id).first()
+    if ngo_profile:
+        create_notification(db, ngo_profile.user_id, "work_submitted", "📋 Work Submitted", f"A student has submitted their work for review.", "/ngo?tab=applications")
+    db.commit()
+    db.refresh(submission)
+    return submission
+
+@app.get("/applications/{application_id}/submission", response_model=WorkSubmissionRead)
+def get_submission(application_id: uuid.UUID, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    submission = db.query(WorkSubmission).filter(WorkSubmission.application_id == application_id).first()
+    if not submission:
+        raise HTTPException(status_code=404, detail="No submission found")
+    return submission
+
+@app.patch("/applications/{application_id}/approve-completion")
+def approve_completion(application_id: uuid.UUID, current_user: User = Depends(require_admin), db: Session = Depends(get_db)):
+    application = db.query(Application).filter(Application.application_id == application_id).first()
+    if not application:
+        raise HTTPException(status_code=404, detail="Application not found")
+    if application.status != "pending_certificate":
+        raise HTTPException(status_code=400, detail="Can only issue certificate for applications pending certificate approval")
+    student = db.query(StudentProfile).filter(StudentProfile.id == application.student_id).first()
+    if student:
+        existing_cert = db.query(Certificate).filter(Certificate.related_id == application.application_id).first()
+        if not existing_cert:
+            import random, string
+            ref = "CERT-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
+            cert = Certificate(student_id=student.id, cert_type="project_completion", reference_number=ref, related_id=application.application_id, issued_by=current_user.id)
+            db.add(cert)
+            create_notification(db, student.user_id, "certificate_issued", "🏆 Certificate Issued!", "Congratulations! Your project completion certificate has been issued.", "/student?tab=certificates")
+    application.status = "officially_complete"
+    application.officially_completed_at = datetime.utcnow()
+    db.commit()
+    return {"status": "certificate issued"}
+
+@app.get("/admin/pending-certificates")
+def get_pending_certificates(current_user: User = Depends(require_admin), db: Session = Depends(get_db)):
+    apps = db.query(Application).filter(Application.status == "pending_certificate").all()
+    result = []
+    for app in apps:
+        student = db.query(StudentProfile).filter(StudentProfile.id == app.student_id).first()
+        project = db.query(Project).filter(Project.id == app.project_id).first()
+        submission = db.query(WorkSubmission).filter(WorkSubmission.application_id == app.application_id).first()
+        result.append({
+            "application_id": str(app.application_id),
+            "student_name": student.full_name if student else "Unknown",
+            "student_reg": student.registration_number if student else "",
+            "project_name": project.project_name if project else "Unknown",
+            "ngo_name": db.query(NgoProfile).filter(NgoProfile.id == project.ngo_id).first().org_name if project else "",
+            "submitted_at": submission.submitted_at.isoformat() if submission else None,
+            "description": submission.description if submission else "",
+            "deliverable_url": submission.deliverable_url if submission else None,
+            "hours_worked": submission.hours_worked if submission else None,
+            "ngo_feedback": submission.ngo_feedback if submission else None,
+        })
+    return result
+
+@app.patch("/applications/{application_id}/review-submission")
+def review_submission(
+    application_id: uuid.UUID,
+    action: str,
+    feedback: str = "",
+    current_user: User = Depends(require_ngo),
+    db: Session = Depends(get_db)
+):
+    application = db.query(Application).filter(Application.application_id == application_id).first()
+    if not application:
+        raise HTTPException(status_code=404, detail="Application not found")
+    submission = db.query(WorkSubmission).filter(WorkSubmission.application_id == application_id).first()
+    if not submission:
+        raise HTTPException(status_code=404, detail="No submission found")
+    if action == "approve":
+        application.status = "pending_certificate"
+        submission.ngo_feedback = feedback
+        admins = db.query(User).filter(User.role == "admin").all()
+        for admin in admins:
+            create_notification(db, admin.id, "pending_certificate", "📋 Certificate Pending", "A student completion is awaiting your certificate approval.", "/admin?tab=certificates")
+    elif action == "revision":
+        application.status = "revision_requested"
+        submission.ngo_feedback = feedback
+        student = db.query(StudentProfile).filter(StudentProfile.id == application.student_id).first()
+        if student:
+            create_notification(db, student.user_id, "revision_requested", "🔄 Revision Requested", f"The NGO has requested revisions: {feedback}", "/student?tab=applications")
+    db.commit()
+    return {"status": application.status}
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -724,7 +833,6 @@ def submit_personal_project(
     current_user: User = Depends(require_verified_student),
     db: Session = Depends(get_db)
 ):
-    # SDG validation
     if data.sdg_focus not in VALID_SDGS:
         raise HTTPException(
             status_code=400,
@@ -836,9 +944,24 @@ def get_my_certificates(
     ).first()
     if not student:
         return []
-    return db.query(Certificate).filter(
+    certs = db.query(Certificate).filter(
         Certificate.student_id == student.id
     ).order_by(Certificate.issued_at.desc()).all()
+    result = []
+    for c in certs:
+        item = CertificateRead.from_orm(c)
+        if c.cert_type == 'project_completion' and c.related_id:
+            app = db.query(Application).filter(Application.application_id == c.related_id).first()
+            if app:
+                project = db.query(Project).filter(Project.id == app.project_id).first()
+                item.project_name = project.project_name if project else None
+                item.title = f"Project Completion — {project.project_name}" if project else "Project Completion"
+            else:
+                item.title = "Project Completion Certificate"
+        else:
+            item.title = c.cert_type.replace('_', ' ').title()
+        result.append(item)
+    return result
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -933,12 +1056,8 @@ def verify_student(
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
 
-    # Status pre-check
     if student.is_verified:
-        raise HTTPException(
-            status_code=400,
-            detail="Student is already verified"
-        )
+        raise HTTPException(status_code=400, detail="Student is already verified")
 
     old_status = "pending_verification"
     student.is_verified       = True
@@ -968,7 +1087,7 @@ def verify_student(
     return {"status": "verified", "student_id": str(student_id)}
 
 
-@app.patch("/students/{student_id}/bulk-verify")
+@app.patch("/students/bulk-verify")
 def bulk_verify_students(
     student_ids: List[uuid.UUID],
     current_user: User = Depends(require_admin),
@@ -1027,12 +1146,8 @@ def approve_organization(
     if not org:
         raise HTTPException(status_code=404, detail="Organisation not found")
 
-    # Status pre-check
     if data.action == "approve" and org.is_approved:
-        raise HTTPException(
-            status_code=400,
-            detail="Organisation is already approved"
-        )
+        raise HTTPException(status_code=400, detail="Organisation is already approved")
 
     old_status = org.approval_status
 
@@ -1104,7 +1219,6 @@ def approve_project(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # Status pre-check
     if data.action == "approve" and project.project_status == "open":
         raise HTTPException(
             status_code=400,
@@ -1188,7 +1302,7 @@ def record_ip(
     seq    = db.execute(text("SELECT nextval('ip_reference_seq')")).scalar()
     ip_ref = f"DKUT-IP-{year}-{seq:04d}"
 
-    old_status         = project.status
+    old_status             = project.status
     project.ip_reference   = ip_ref
     project.ip_recorded_at = datetime.utcnow()
     project.ip_recorded_by = current_user.id
@@ -1298,3 +1412,497 @@ def get_audit_log(
     """), {"limit": limit}).fetchall()
 
     return {"logs": [dict(row._mapping) for row in result]}
+# ═══════════════════════════════════════════════════════════════════════════════
+# MESSAGING
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.post("/messages/threads", response_model=MessageThreadRead, status_code=status.HTTP_201_CREATED)
+def create_message_thread(
+    data: MessageThreadCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    existing = db.query(MessageThread).filter(
+        MessageThread.student_id == data.student_id,
+        MessageThread.ngo_id == data.ngo_id,
+        MessageThread.project_id == data.project_id
+    ).first()
+    if existing:
+        return existing
+    thread = MessageThread(
+        project_id=data.project_id,
+        student_id=data.student_id,
+        ngo_id=data.ngo_id,
+        opened_by=current_user.id,
+        purpose=data.purpose,
+        status="open"
+    )
+    db.add(thread)
+    db.commit()
+    db.refresh(thread)
+    return thread
+
+
+@app.get("/messages/threads", response_model=List[MessageThreadRead])
+def get_my_threads(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.role == "student":
+        student = db.query(StudentProfile).filter(
+            StudentProfile.user_id == current_user.id
+        ).first()
+        if not student:
+            return []
+        return db.query(MessageThread).filter(
+            MessageThread.student_id == student.id
+        ).order_by(MessageThread.created_at.desc()).all()
+    elif current_user.role == "ngo":
+        ngo = db.query(NgoProfile).filter(
+            NgoProfile.user_id == current_user.id
+        ).first()
+        if not ngo:
+            return []
+        return db.query(MessageThread).filter(
+            MessageThread.ngo_id == ngo.id
+        ).order_by(MessageThread.created_at.desc()).all()
+    else:
+        return db.query(MessageThread).order_by(MessageThread.created_at.desc()).all()
+
+
+@app.get("/messages/threads/{thread_id}", response_model=MessageThreadRead)
+def get_thread(
+    thread_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    thread = db.query(MessageThread).filter(
+        MessageThread.id == thread_id
+    ).first()
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    return thread
+
+
+@app.post("/messages/threads/{thread_id}/messages", response_model=MessageRead, status_code=status.HTTP_201_CREATED)
+def send_message(
+    thread_id: uuid.UUID,
+    data: MessageCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    thread = db.query(MessageThread).filter(
+        MessageThread.id == thread_id
+    ).first()
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    if thread.status == "closed":
+        raise HTTPException(status_code=400, detail="Thread is closed")
+    if not data.content.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+    message = Message(
+        thread_id=thread_id,
+        sender_id=current_user.id,
+        sender_role=current_user.role,
+        content=clean(data.content)
+    )
+    db.add(message)
+    if current_user.role == "student":
+        ngo = db.query(NgoProfile).filter(NgoProfile.id == thread.ngo_id).first()
+        if ngo:
+            create_notification(
+                db, ngo.user_id, "new_message",
+                "New Message", "You have a new message from a student.",
+                "/ngo?tab=messages"
+            )
+    elif current_user.role == "ngo":
+        student = db.query(StudentProfile).filter(StudentProfile.id == thread.student_id).first()
+        if student:
+            create_notification(
+                db, student.user_id, "new_message",
+                "New Message", "You have a new message from an NGO.",
+                "/student?tab=messages"
+            )
+    db.commit()
+    db.refresh(message)
+    return message
+
+
+@app.patch("/messages/threads/{thread_id}/close")
+def close_thread(
+    thread_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    thread = db.query(MessageThread).filter(
+        MessageThread.id == thread_id
+    ).first()
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    thread.status = "closed"
+    thread.closed_at = datetime.utcnow()
+    db.commit()
+    return {"status": "closed"}
+# ═══════════════════════════════════════════════════════════════════════════════
+# DISPUTES
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.post("/disputes", response_model=DisputeRead, status_code=status.HTTP_201_CREATED)
+def raise_dispute(
+    data: DisputeCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # against_id could be ngo_profile.id — resolve to user.id
+    against_user_id = data.against_id
+    ngo = db.query(NgoProfile).filter(NgoProfile.id == data.against_id).first()
+    if ngo:
+        against_user_id = ngo.user_id
+
+    dispute = Dispute(
+        raised_by=current_user.id,
+        against_id=against_user_id,
+        application_id=data.application_id,
+        personal_project_id=data.personal_project_id,
+        dispute_type=data.dispute_type,
+        description=clean(data.description),
+        status="open"
+    )
+    db.add(dispute)
+    db.commit()
+    db.refresh(dispute)
+    create_notification(
+        db, data.against_id, "dispute_raised",
+        "Dispute Raised Against You",
+        f"A {data.dispute_type} dispute has been raised against you.",
+        "/admin"
+    )
+    return dispute
+
+
+@app.get("/disputes/mine", response_model=List[DisputeRead])
+def get_my_disputes(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    return db.query(Dispute).filter(
+        Dispute.raised_by == current_user.id
+    ).order_by(Dispute.created_at.desc()).all()
+
+
+@app.get("/disputes", response_model=List[DisputeRead])
+def get_all_disputes(
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    return db.query(Dispute).order_by(Dispute.created_at.desc()).all()
+
+
+@app.patch("/disputes/{dispute_id}/resolve", response_model=DisputeRead)
+def resolve_dispute(
+    dispute_id: uuid.UUID,
+    resolution_notes: str,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    dispute = db.query(Dispute).filter(Dispute.id == dispute_id).first()
+    if not dispute:
+        raise HTTPException(status_code=404, detail="Dispute not found")
+    if dispute.status == "resolved":
+        raise HTTPException(status_code=400, detail="Already resolved")
+    dispute.status = "resolved"
+    dispute.resolution_notes = resolution_notes
+    dispute.resolved_by = current_user.id
+    dispute.resolved_at = datetime.utcnow()
+    db.commit()
+    db.refresh(dispute)
+    create_notification(
+        db, dispute.raised_by, "dispute_resolved",
+        "Your Dispute Has Been Resolved",
+        f"Resolution: {resolution_notes[:100]}",
+        "/student?tab=disputes"
+    )
+    return dispute
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# RECOMMENDATION LETTERS — ADMIN
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/letters/all", response_model=List[RecommendationRequestRead])
+def get_all_letter_requests(
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    return db.query(RecommendationRequest).order_by(
+        RecommendationRequest.created_at.desc()
+    ).all()
+
+
+@app.patch("/letters/{letter_id}/review")
+def review_letter_request(
+    letter_id: uuid.UUID,
+    action: str,
+    pdf_url: Optional[str] = None,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    letter = db.query(RecommendationRequest).filter(
+        RecommendationRequest.id == letter_id
+    ).first()
+    if not letter:
+        raise HTTPException(status_code=404, detail="Letter request not found")
+    if action not in ["approved", "rejected"]:
+        raise HTTPException(status_code=400, detail="Action must be approved or rejected")
+    letter.status = action
+    letter.reviewed_by = current_user.id
+    letter.reviewed_at = datetime.utcnow()
+    if pdf_url:
+        letter.pdf_url = pdf_url
+    db.commit()
+    db.refresh(letter)
+    student = db.query(StudentProfile).filter(
+        StudentProfile.id == letter.student_id
+    ).first()
+    if student:
+        create_notification(
+            db, student.user_id, "letter_reviewed",
+            f"Recommendation Letter {action.capitalize()}",
+            f"Your recommendation letter request has been {action}.",
+            "/student?tab=letters"
+        )
+    return letter
+# ═══════════════════════════════════════════════════════════════════════════════
+# BOOTCAMPS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.post("/bootcamps", response_model=BootcampRead, status_code=status.HTTP_201_CREATED)
+def create_bootcamp(
+    data: BootcampCreate,
+    current_user: User = Depends(require_approved_ngo),
+    db: Session = Depends(get_db)
+):
+    ngo = db.query(NgoProfile).filter(NgoProfile.user_id == current_user.id).first()
+    bootcamp = Bootcamp(
+        project_id=data.project_id,
+        ngo_id=ngo.id,
+        title=clean(data.title),
+        description=clean(data.description) if data.description else None,
+        skills_taught=data.skills_taught or [],
+        delivery_mode=data.delivery_mode,
+        scheduled_date=data.scheduled_date,
+        duration_hours=data.duration_hours,
+        facilitator_names=data.facilitator_names,
+        max_attendees=data.max_attendees,
+        prerequisites=data.prerequisites,
+        materials_url=data.materials_url,
+        status="pending_approval"
+    )
+    db.add(bootcamp)
+    db.commit()
+    db.refresh(bootcamp)
+    return bootcamp
+
+
+@app.get("/bootcamps", response_model=List[BootcampRead])
+def get_bootcamps(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.role == "ngo":
+        ngo = db.query(NgoProfile).filter(NgoProfile.user_id == current_user.id).first()
+        if not ngo:
+            return []
+        return db.query(Bootcamp).filter(Bootcamp.ngo_id == ngo.id).order_by(Bootcamp.created_at.desc()).all()
+    return db.query(Bootcamp).filter(Bootcamp.admin_verified == True).order_by(Bootcamp.created_at.desc()).all()
+
+
+@app.get("/bootcamps/all", response_model=List[BootcampRead])
+def get_all_bootcamps(
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    bootcamps = db.query(Bootcamp).order_by(Bootcamp.created_at.desc()).all()
+    result = []
+    for b in bootcamps:
+        ngo = db.query(NgoProfile).filter(NgoProfile.id == b.ngo_id).first()
+        project = db.query(Project).filter(Project.id == b.project_id).first()
+        item = BootcampRead.from_orm(b)
+        item.ngo_name = ngo.organization_name if ngo else str(b.ngo_id)[:8]
+        item.project_name = project.project_name if project else str(b.project_id)[:8]
+        result.append(item)
+    return result
+
+
+@app.patch("/bootcamps/{bootcamp_id}/verify")
+def verify_bootcamp(
+    bootcamp_id: uuid.UUID,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    bootcamp = db.query(Bootcamp).filter(Bootcamp.id == bootcamp_id).first()
+    if not bootcamp:
+        raise HTTPException(status_code=404, detail="Bootcamp not found")
+    bootcamp.admin_verified = True
+    bootcamp.verified_by = current_user.id
+    bootcamp.status = "approved"
+    db.commit()
+    return {"status": "verified"}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# AWARDS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.post("/awards/categories", response_model=AwardCategoryRead, status_code=status.HTTP_201_CREATED)
+def create_award_category(
+    data: AwardCategoryCreate,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    cat = AwardCategory(
+        name=data.name,
+        description=data.description,
+        track=data.track,
+        frequency=data.frequency
+    )
+    db.add(cat)
+    db.commit()
+    db.refresh(cat)
+    return cat
+
+
+@app.get("/awards/categories", response_model=List[AwardCategoryRead])
+def get_award_categories(
+    db: Session = Depends(get_db)
+):
+    return db.query(AwardCategory).filter(AwardCategory.is_active == True).all()
+
+
+@app.post("/awards", response_model=AwardRead, status_code=status.HTTP_201_CREATED)
+def issue_award(
+    data: AwardCreate,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    award = Award(
+        category_id=data.category_id,
+        winner_student_id=data.winner_student_id,
+        application_id=data.application_id,
+        personal_project_id=data.personal_project_id,
+        award_period=data.award_period,
+        cash_amount=data.cash_amount,
+        certificate_url=data.certificate_url,
+        issued_by=current_user.id
+    )
+    db.add(award)
+    db.commit()
+    db.refresh(award)
+    student = db.query(StudentProfile).filter(
+        StudentProfile.id == data.winner_student_id
+    ).first()
+    if student:
+        create_notification(
+            db, student.user_id, "award_issued",
+            "🏅 You've Been Awarded!",
+            f"Congratulations! You have received an award for {data.award_period}.",
+            "/student?tab=overview"
+        )
+    return award
+
+
+@app.get("/awards", response_model=List[AwardRead])
+def get_awards(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.role == "student":
+        student = db.query(StudentProfile).filter(StudentProfile.user_id == current_user.id).first()
+        if not student:
+            return []
+        awards = db.query(Award).filter(Award.winner_student_id == student.id).all()
+    else:
+        awards = db.query(Award).order_by(Award.issued_at.desc()).all()
+    result = []
+    for a in awards:
+        student = db.query(StudentProfile).filter(StudentProfile.id == a.winner_student_id).first()
+        category = db.query(AwardCategory).filter(AwardCategory.id == a.category_id).first()
+        item = AwardRead.from_orm(a)
+        item.student_name = student.display_name if student else str(a.winner_student_id)[:8]
+        item.category_name = category.name if category else str(a.category_id)[:8]
+        result.append(item)
+    return result
+
+# ─── REVIEWS ──────────────────────────────────────────────────────────────────
+@app.post("/reviews/ngo-reviews-student", response_model=dict)
+def ngo_review_student(
+    data: StudentReviewCreate,
+    application_id: uuid.UUID,
+    current_user: User = Depends(require_ngo),
+    db: Session = Depends(get_db)
+):
+    application = db.query(Application).filter(Application.application_id == application_id).first()
+    if not application:
+        raise HTTPException(status_code=404, detail="Application not found")
+    if application.status != "officially_complete":
+        raise HTTPException(status_code=400, detail="Can only review completed applications")
+    ngo = db.query(NgoProfile).filter(NgoProfile.user_id == current_user.id).first()
+    existing = db.query(StudentReview).filter(StudentReview.application_id == application_id).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Review already submitted")
+    review = StudentReview(
+        application_id=application_id,
+        ngo_id=ngo.id,
+        student_id=application.student_id,
+        overall_rating=data.overall_rating,
+        review_text=data.review_text,
+        is_public=True
+    )
+    db.add(review)
+    create_notification(db, application.student.user_id, "review_received",
+        "⭐ New Review!", "An NGO has reviewed your project work.", "/student?tab=profile")
+    db.commit()
+    return {"message": "Review submitted"}
+
+@app.post("/reviews/student-reviews-ngo", response_model=dict)
+def student_review_ngo(
+    data: NgoReviewCreate,
+    application_id: uuid.UUID,
+    current_user: User = Depends(require_student),
+    db: Session = Depends(get_db)
+):
+    application = db.query(Application).filter(Application.application_id == application_id).first()
+    if not application:
+        raise HTTPException(status_code=404, detail="Application not found")
+    if application.status != "officially_complete":
+        raise HTTPException(status_code=400, detail="Can only review completed applications")
+    student = db.query(StudentProfile).filter(StudentProfile.user_id == current_user.id).first()
+    if application.student_id != student.id:
+        raise HTTPException(status_code=403, detail="Not your application")
+    existing = db.query(NgoReview).filter(NgoReview.application_id == application_id).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Review already submitted")
+    review = NgoReview(
+        application_id=application_id,
+        student_id=student.id,
+        ngo_id=application.project.ngo_id,
+        clarity_rating=data.clarity_rating,
+        support_rating=data.support_rating,
+        fairness_rating=data.fairness_rating,
+        sdg_authenticity_rating=data.sdg_authenticity_rating,
+        review_text=data.review_text,
+        is_public=True
+    )
+    db.add(review)
+    db.commit()
+    return {"message": "Review submitted"}
+
+@app.get("/reviews/my-student-reviews", response_model=list)
+def get_my_student_reviews(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    student = db.query(StudentProfile).filter(StudentProfile.user_id == current_user.id).first()
+    if not student:
+        return []
+    reviews = db.query(StudentReview).filter(StudentReview.student_id == student.id).all()
+    return [{"id": str(r.id), "overall_rating": float(r.overall_rating), "review_text": r.review_text, "created_at": str(r.created_at), "application_id": str(r.application_id)} for r in reviews]

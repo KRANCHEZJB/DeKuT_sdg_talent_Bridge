@@ -114,7 +114,11 @@ class Project(Base):
     approved_by        = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     approved_at        = Column(TIMESTAMP(timezone=True), nullable=True)
     rejection_reason   = Column(Text,        nullable=True)
-    created_at         = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
+    created_at                = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
+    submission_type           = Column(String(30),  nullable=False, server_default="link")
+    submission_instructions   = Column(Text,        nullable=True)
+    physical_review_date      = Column(TIMESTAMP(timezone=True), nullable=True)
+    physical_review_location  = Column(String(255), nullable=True)
 
     # Relationships
     ngo                 = relationship("NgoProfile", back_populates="projects")
@@ -605,6 +609,18 @@ class Notification(Base):
 
 
 # ─── CERTIFICATE ──────────────────────────────────────────────────────────────
+
+class WorkSubmission(Base):
+    __tablename__ = "work_submissions"
+    id             = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    application_id = Column(UUID(as_uuid=True), ForeignKey("applications.application_id", ondelete="CASCADE"), nullable=False, unique=True)
+    student_id     = Column(UUID(as_uuid=True), ForeignKey("student_profiles.id", ondelete="CASCADE"), nullable=False)
+    description    = Column(Text, nullable=False)
+    deliverable_url= Column(Text, nullable=True)
+    hours_worked   = Column(Integer, nullable=True)
+    submitted_at   = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
+    ngo_feedback   = Column(Text, nullable=True)
+    application    = relationship("Application", backref="work_submission")
 
 class Certificate(Base):
     __tablename__ = "certificates"

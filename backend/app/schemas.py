@@ -135,6 +135,10 @@ class ProjectCreate(BaseModel):
     team_size_max: Optional[int] = 1
     technology_level: Optional[str] = "basic"
     requires_funding: Optional[bool] = False
+    submission_type: Optional[str] = "link"
+    submission_instructions: Optional[str] = None
+    physical_review_date: Optional[datetime] = None
+    physical_review_location: Optional[str] = None
 
 class ProjectRead(BaseModel):
     id: uuid.UUID
@@ -157,6 +161,10 @@ class ProjectRead(BaseModel):
     bootcamp_required: bool
     rejection_reason: Optional[str] = None
     created_at: datetime
+    submission_type: str = "link"
+    submission_instructions: Optional[str] = None
+    physical_review_date: Optional[datetime] = None
+    physical_review_location: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -310,12 +318,30 @@ class NotificationSummary(BaseModel):
 
 # ─── CERTIFICATES ─────────────────────────────────────────────────────────────
 
+class WorkSubmissionCreate(BaseModel):
+    description: str
+    deliverable_url: Optional[str] = None
+    hours_worked: Optional[int] = None
+
+class WorkSubmissionRead(BaseModel):
+    id: uuid.UUID
+    application_id: uuid.UUID
+    description: str
+    deliverable_url: Optional[str] = None
+    hours_worked: Optional[int] = None
+    submitted_at: datetime
+    ngo_feedback: Optional[str] = None
+    class Config:
+        from_attributes = True
+
 class CertificateRead(BaseModel):
     id: uuid.UUID
     cert_type: str
     reference_number: str
     pdf_url: Optional[str] = None
     issued_at: datetime
+    title: Optional[str] = None
+    project_name: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -452,6 +478,82 @@ class BootcampRead(BaseModel):
     status: str
     admin_verified: bool
     created_at: datetime
+    ngo_name: Optional[str] = None
+    project_name: Optional[str] = None
 
+    class Config:
+        from_attributes = True
+
+# ─── AWARDS ──────────────────────────────────────────────────────────────────
+class AwardCategoryCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    track: str
+    frequency: str
+
+class AwardCategoryRead(BaseModel):
+    id: uuid.UUID
+    name: str
+    description: Optional[str] = None
+    track: str
+    frequency: str
+    is_active: bool
+    created_at: datetime
+    class Config:
+        from_attributes = True
+
+class AwardCreate(BaseModel):
+    category_id: uuid.UUID
+    winner_student_id: uuid.UUID
+    application_id: Optional[uuid.UUID] = None
+    personal_project_id: Optional[uuid.UUID] = None
+    award_period: str
+    cash_amount: Optional[float] = 0
+    certificate_url: Optional[str] = None
+
+class AwardRead(BaseModel):
+    id: uuid.UUID
+    category_id: uuid.UUID
+    winner_student_id: uuid.UUID
+    award_period: str
+    cash_amount: Optional[float] = 0
+    certificate_url: Optional[str] = None
+    issued_at: datetime
+    student_name: Optional[str] = None
+    category_name: Optional[str] = None
+    class Config:
+        from_attributes = True
+
+# ─── MESSAGING ────────────────────────────────────────────────────────────────
+class MessageThreadCreate(BaseModel):
+    project_id: Optional[uuid.UUID] = None
+    student_id: uuid.UUID
+    ngo_id: uuid.UUID
+    purpose: str = "general"
+
+class MessageCreate(BaseModel):
+    content: str
+
+class MessageRead(BaseModel):
+    id: uuid.UUID
+    thread_id: uuid.UUID
+    sender_id: uuid.UUID
+    sender_role: str
+    content: str
+    sent_at: datetime
+    is_flagged: bool
+    class Config:
+        from_attributes = True
+
+class MessageThreadRead(BaseModel):
+    id: uuid.UUID
+    project_id: Optional[uuid.UUID] = None
+    student_id: uuid.UUID
+    ngo_id: uuid.UUID
+    opened_by: uuid.UUID
+    purpose: str
+    status: str
+    created_at: datetime
+    messages: List[MessageRead] = []
     class Config:
         from_attributes = True
