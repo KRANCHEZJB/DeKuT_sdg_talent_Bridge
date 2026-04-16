@@ -60,15 +60,25 @@ const AuthPage = () => {
     setSuccess('')
     try {
       if (mode === 'register') {
-        await registerApi({ email: form.email, password: form.password, first_name: form.first_name, last_name: form.last_name, role })
-        setSuccess(`✅ Account created! Welcome to SDG Talent Bridge. Please login.`)
+        await registerApi({
+          email: form.email,
+          password: form.password,
+          first_name: form.first_name,
+          last_name: form.last_name,
+          role
+        })
+        setSuccess('✅ Account created! Welcome to SDG Talent Bridge. Please login.')
         setForm(EMPTY_FORM)
         setMode('login')
         return
       }
       const res = await loginApi({ email: form.email, password: form.password })
-      login(res.data.access_token, res.data.role)
-      navigate(res.data.role === 'student' ? '/student' : '/ngo')
+      await login(res.data.access_token)
+      const userRole = res.data.role
+      if (userRole === 'student') navigate('/student')
+      else if (userRole === 'ngo') navigate('/ngo')
+      else if (userRole === 'admin' || userRole === 'super_admin') navigate('/admin')
+      else navigate('/')
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Something went wrong. Please try again.')
     } finally {
@@ -152,7 +162,7 @@ const AuthPage = () => {
         <div style={{ position: 'absolute', inset: 0, backgroundImage: 'linear-gradient(rgba(255,255,255,0.012) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.012) 1px, transparent 1px)', backgroundSize: '60px 60px' }} />
       </div>
 
-      {/* Left panel — branding + perks */}
+      {/* Left panel */}
       <div className="left-panel" style={{ position: 'relative', zIndex: 1 }}>
         <div style={{ cursor: 'pointer', marginBottom: '48px' }} onClick={() => navigate('/')}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
@@ -224,7 +234,7 @@ const AuthPage = () => {
             <button className={`tab-btn ${mode === 'register' ? (role === 'ngo' ? 'active-ngo' : 'active-student') : ''}`} onClick={() => switchMode('register')}>Create Account</button>
           </div>
 
-          {/* Role selector (register only) */}
+          {/* Role selector */}
           {mode === 'register' && (
             <div style={{ marginBottom: '20px' }}>
               <p style={{ color: '#94A3B8', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '8px' }}>I am registering as...</p>
@@ -245,7 +255,6 @@ const AuthPage = () => {
 
           {/* Card */}
           <div className="auth-card" style={{ background: 'rgba(255,255,255,0.04)', backdropFilter: 'blur(24px)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '20px', padding: '28px' }}>
-
             <h3 style={{ fontFamily: "'Syne', sans-serif", fontSize: '18px', fontWeight: 800, marginBottom: '4px' }}>
               {mode === 'login' ? 'Sign in to your account' : role === 'student' ? 'Create student account' : 'Register your organization'}
             </h3>

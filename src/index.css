@@ -1,27 +1,67 @@
-@import "tailwindcss";
-
-:root {
-  --primary: #0A6EBD;
-  --primary-dark: #084E8A;
-  --primary-light: #E8F4FD;
-  --success: #00A651;
-  --warning: #FDB913;
-  --danger: #E53E3E;
-  --bg: #0F172A;
-  --surface: #1E293B;
-  --border: #334155;
-  --text-primary: #F1F5F9;
-  --text-secondary: #94A3B8;
-}
-
-* {
+*, *::before, *::after {
+  box-sizing: border-box;
   margin: 0;
   padding: 0;
-  box-sizing: border-box;
 }
 
-body {
-  background-color: #0F172A;
-  color: #F1F5F9;
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+html, body {
+  height: 100%;
+  background: #0a0a0f;
+  color: #f1f5f9;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  height: 100%;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #111118;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a2a3a;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3a3a4a;
+}
+
+/* Skeleton pulse animation */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+
+/* Project grid */
+.proj-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 20px;
+}
+
+/* Smooth transitions */
+button {
+  transition: all 0.15s ease;
+}
+
+button:hover {
+  opacity: 0.9;
+}
+
+/* Links */
+a {
+  color: inherit;
+}
+
+/* Remove default input styles */
+input, textarea, select {
+  font-family: inherit;
+  font-size: inherit;
 }

@@ -1,59 +1,62 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { getMe } from '../api/api';
-
-interface User {
-  id: string;
-  email: string;
-  first_name: string;
-  last_name: string;
-  role: string;
-}
+import {
+  createContext, useContext, useState,
+  useEffect, useCallback, type ReactNode
+} from 'react'
+import { getMe, setToken, getToken } from '../api/api'
+import type { User } from '../types/index'
 
 interface AuthContextType {
-  user: User | null;
-  token: string | null;
-  login: (token: string, role: string) => void;
-  logout: () => void;
-  loading: boolean;
+  user:    User | null
+  loading: boolean
+  login:   (token: string) => Promise<void>
+  logout:  () => void
 }
 
-const AuthContext = createContext<AuthContextType>({} as AuthContextType);
+const defaultAuth: AuthContextType = {
+  user:    null,
+  loading: true,
+  login:   async (_token: string) => {},
+  logout:  () => {},
+}
+
+const AuthContext = createContext<AuthContextType>(defaultAuth)
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
-  const [loading, setLoading] = useState(true);
+  const [user,    setUser]    = useState<User | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  const logout = useCallback(() => {
+    setToken(null)
+    setUser(null)
+    window.location.href = '/auth'
+  }, [])
+
+  const login = useCallback(async (token: string) => {
+    setToken(token)
+    const res = await getMe()
+    setUser(res.data)
+  }, [])
 
   useEffect(() => {
-    if (token) {
-      getMe()
-        .then((res) => setUser(res.data))
-        .catch(() => {
-          localStorage.removeItem('token');
-          setToken(null);
-        })
-        .finally(() => setLoading(false));
-    } else {
-      setLoading(false);
+    const token = getToken()
+    if (!token) {
+      setLoading(false)
+      return
     }
-  }, [token]);
-
-  const login = (newToken: string) => {
-    localStorage.setItem('token', newToken);
-    setToken(newToken);
-  };
-
-  const logout = () => {
-    localStorage.removeItem('token');
-    setToken(null);
-    setUser(null);
-  };
+    getMe()
+      .then(res => setUser(res.data))
+      .catch(() => {
+        setToken(null)
+        setUser(null)
+      })
+      .finally(() => setLoading(false))
+  }, [])
 
   return (
-    <AuthContext.Provider value={{ user, token, login, logout, loading }}>
+    <AuthContext.Provider value={{ user, loading, login, logout }}>
       {children}
     </AuthContext.Provider>
-  );
-};
+  )
+}
 
-export const useAuth = () => useContext(AuthContext);
+export const useAuth = () => useContext(AuthContext)

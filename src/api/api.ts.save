@@ -19,7 +19,7 @@ export const setToken = (token: string | null) => {
 }
 
 export const getToken = (): string | null => {
-  return tokenMemory || localStorage.getItem('dekut_token')
+  return tokenMemory || localStorage.getItemdekut_token')
 }
 
 // ─── REQUEST INTERCEPTOR ──────────────────────────────────────────────────────
@@ -237,37 +237,3 @@ export const getAllLetterRequests = () =>
   API.get('/letters/all')
 export const reviewLetterRequest = (letterId: string, action: string, pdf_url?: string) =>
   API.patch(`/letters/${letterId}/review`, null, { params: { action, pdf_url } })
-// ─── BOOTCAMPS ────────────────────────────────────────────────────────────────
-export const createBootcamp = (data: object) =>
-  API.post('/bootcamps', data)
-export const getBootcamps = () =>
-  API.get('/bootcamps')
-export const getAllBootcamps = () =>
-  API.get('/bootcamps/all')
-export const verifyBootcamp = (bootcampId: string) =>
-  API.patch(`/bootcamps/${bootcampId}/verify`)
-
-// ─── AWARDS ───────────────────────────────────────────────────────────────────
-export const getAwardCategories = () =>
-  API.get('/awards/categories')
-export const createAwardCategory = (data: object) =>
-  API.post('/awards/categories', data)
-export const issueAward = (data: object) =>
-  API.post('/awards', data)
-export const getAwards = () =>
-  API.get('/awards')
-export const submitStudentReview = (application_id: string, data: object) =>
-  API.post(`/reviews/ngo-reviews-student?application_id=${application_id}`, data)
-export const submitNgoReview = (application_id: string, data: object) =>
-  API.post(`/reviews/student-reviews-ngo?application_id=${application_id}`, data)
-export const getMyStudentReviews = () =>
-  API.get('/reviews/my-student-reviews')
-
-export const getPendingCertificates = (signal?: AbortSignal) =>
-  API.get('/admin/pending-certificates', { signal })
-export const issueCertificate = (applicationId: string) =>
-  API.patch(`/applications/${applicationId}/approve-completion`)
-export const submitWork = (applicationId: string, data: object) =>
-  API.post(`/applications/${applicationId}/submit-work`, data)
-export const reviewSubmission = (applicationId: string, action: string, feedback: string) =>
-  API.patch(`/applications/${applicationId}/review-submission?action=${action}&feedback=${encodeURIComponent(feedback)}`)
