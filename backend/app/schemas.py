@@ -1,34 +1,34 @@
 import uuid
 from datetime import datetime, date
 from typing import Optional, List
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, Field, EmailStr
 
 
 # ─── AUTH ─────────────────────────────────────────────────────────────────────
 
 class UserRegister(BaseModel):
-    email: str
-    password: str
-    first_name: str
-    last_name: str
+    email: str = Field(..., max_length=150)
+    password: str = Field(..., max_length=128)
+    first_name: str = Field(..., max_length=100)
+    last_name: str = Field(..., max_length=100)
     role: str
 
 class UserLogin(BaseModel):
-    email: str
-    password: str
+    email: str = Field(..., max_length=150)
+    password: str = Field(..., max_length=128)
 
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str
     role: str
-    first_name: str
-    last_name: str
+    first_name: str = Field(..., max_length=100)
+    last_name: str = Field(..., max_length=100)
 
 class UserRead(BaseModel):
     id: uuid.UUID
-    email: str
-    first_name: str
-    last_name: str
+    email: str = Field(..., max_length=150)
+    first_name: str = Field(..., max_length=100)
+    last_name: str = Field(..., max_length=100)
     role: str
     created_at: datetime
 

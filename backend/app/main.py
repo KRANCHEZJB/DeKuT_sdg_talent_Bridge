@@ -147,6 +147,10 @@ def write_audit_log(
     })
 
 
+def validate_slug(slug: str):
+    if not re.match(r"^[a-z0-9][a-z0-9-]{1,98}[a-z0-9]$", slug):
+        raise HTTPException(status_code=422, detail="Invalid slug format")
+
 def generate_slug(name: str) -> str:
     slug = name.lower().strip()
     slug = re.sub(r'[^a-z0-9\s-]', '', slug)
@@ -227,7 +231,7 @@ def register(
         raise HTTPException(status_code=400, detail="Role must be student or ngo")
 
     if db.query(User).filter(User.email == data.email.lower()).first():
-        raise HTTPException(status_code=400, detail="An account with this email already exists")
+        raise HTTPException(status_code=409, detail="An account with this email already exists")
 
     if len(data.password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
@@ -295,6 +299,7 @@ def create_or_update_student_profile(
     skills          = [clean(s) for s in (data.skills or [])]
 
     slug = data.profile_slug or generate_slug(display_name)
+    validate_slug(slug)
 
     existing = db.query(StudentProfile).filter(
         StudentProfile.profile_slug == slug
