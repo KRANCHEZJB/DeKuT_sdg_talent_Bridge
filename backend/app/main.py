@@ -73,6 +73,8 @@ app.add_middleware(
         "http://localhost:5173",
         "http://localhost:5174",
         "http://localhost:3000",
+        "https://de-ku-t-sdg-talent-bridge-7kz8n5slt-francis-gachokis-projects.vercel.app",
+        "https://de-ku-t-sdg-talent-bridge.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
