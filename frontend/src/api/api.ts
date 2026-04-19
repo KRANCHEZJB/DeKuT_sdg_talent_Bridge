@@ -2,7 +2,7 @@ import axios from 'axios'
 
 // ─── AXIOS INSTANCE ───────────────────────────────────────────────────────────
 const API = axios.create({
-  baseURL: 'https://dekut-sdg-talent-bridge.onrender.com',
+  baseURL: 'http://localhost:8000',
   timeout: 15000,
 })
 
