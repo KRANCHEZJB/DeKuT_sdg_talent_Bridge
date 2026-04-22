@@ -1,6 +1,9 @@
-node_modules/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.cpython-*.pyc
+*.egg-info/
 dist/
+build/
 .env
-.env.local
-.DS_Store
-Thumbs.db

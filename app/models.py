@@ -21,6 +21,8 @@ class User(Base):
     last_name       = Column(String(100), nullable=False)
     role            = Column(String(20),  nullable=False)
     last_login      = Column(TIMESTAMP(timezone=True), nullable=True)
+    status          = Column(String(20),  nullable=False, server_default="active")
+    deletion_scheduled_at = Column(TIMESTAMP(timezone=True), nullable=True)
     created_at      = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
 
     # Relationships

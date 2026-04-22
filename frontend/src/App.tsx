@@ -2,11 +2,11 @@ import React from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
 import { NotificationProvider } from './context/NotificationContext'
-import LandingPage from './pages/LandingPage'
-import AuthPage from './pages/AuthPage'
-import StudentDashboard from './pages/StudentDashboard'
-import NgoDashboard from './pages/NgoDashboard'
-import AdminDashboard from './pages/AdminDashboard'
+const LandingPage      = React.lazy(() => import('./pages/LandingPage'))
+const AuthPage         = React.lazy(() => import('./pages/AuthPage'))
+const StudentDashboard = React.lazy(() => import('./pages/StudentDashboard'))
+const NgoDashboard     = React.lazy(() => import('./pages/NgoDashboard'))
+const AdminDashboard   = React.lazy(() => import('./pages/AdminDashboard'))
 
 // ─── PROTECTED ROUTE ──────────────────────────────────────────────────────────
 interface ProtectedRouteProps {
@@ -42,6 +42,11 @@ function App() {
   const { user } = useAuth()
 
   return (
+    <React.Suspense fallback={
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#060D1F', color: '#F1F5F9', fontFamily: 'Inter, sans-serif', fontSize: '16px' }}>
+        Loading...
+      </div>
+    }>
     <Routes>
       {/* Public */}
       <Route path="/" element={<LandingPage />} />
@@ -98,6 +103,7 @@ function App() {
       {/* Fallback */}
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+    </React.Suspense>
   )
 }
 

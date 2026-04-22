@@ -75,6 +75,16 @@ export interface Application {
   selected_at: string | null
 }
 
+export interface WorkSubmission {
+  id: string
+  application_id: string
+  description: string
+  deliverable_url: string | null
+  hours_worked: number | null
+  submitted_at: string
+  ngo_feedback: string | null
+}
+
 export interface PersonalProject {
   id: string
   student_id: string

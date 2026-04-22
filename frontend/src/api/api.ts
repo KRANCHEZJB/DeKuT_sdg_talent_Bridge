@@ -212,3 +212,91 @@ export const listOrganizations    = (signal?: AbortSignal) =>
   API.get('/organizations', { signal })
 
 export default API
+// ─── MESSAGING ────────────────────────────────────────────────────────────────
+export const getMyThreads = (signal?: AbortSignal) =>
+  API.get('/messages/threads', { signal })
+export const getThread = (threadId: string) =>
+  API.get(`/messages/threads/${threadId}`)
+export const createThread = (data: object) =>
+  API.post('/messages/threads', data)
+export const sendMessage = (threadId: string, data: object) =>
+  API.post(`/messages/threads/${threadId}/messages`, data)
+export const closeThread = (threadId: string) =>
+  API.patch(`/messages/threads/${threadId}/close`)
+// ─── DISPUTES ─────────────────────────────────────────────────────────────────
+export const raiseDispute = (data: object) =>
+  API.post('/disputes', data)
+export const getMyDisputes = () =>
+  API.get('/disputes/mine')
+export const getAllDisputes = () =>
+  API.get('/disputes')
+export const resolveDispute = (disputeId: string, resolution_notes: string) =>
+  API.patch(`/disputes/${disputeId}/resolve`, null, { params: { resolution_notes } })
+// ─── RECOMMENDATION LETTERS — ADMIN ───────────────────────────────────────────
+export const getAllLetterRequests = () =>
+  API.get('/letters/all')
+export const reviewLetterRequest = (letterId: string, action: string, pdf_url?: string) =>
+  API.patch(`/letters/${letterId}/review`, null, { params: { action, pdf_url } })
+// ─── BOOTCAMPS ────────────────────────────────────────────────────────────────
+export const createBootcamp = (data: object) =>
+  API.post('/bootcamps', data)
+export const getBootcamps = () =>
+  API.get('/bootcamps')
+export const getAllBootcamps = () =>
+  API.get('/bootcamps/all')
+export const verifyBootcamp = (bootcampId: string) =>
+  API.patch(`/bootcamps/${bootcampId}/verify`)
+
+// ─── AWARDS ───────────────────────────────────────────────────────────────────
+export const getAwardCategories = () =>
+  API.get('/awards/categories')
+export const createAwardCategory = (data: object) =>
+  API.post('/awards/categories', data)
+export const issueAward = (data: object) =>
+  API.post('/awards', data)
+export const getAwards = () =>
+  API.get('/awards')
+export const submitStudentReview = (application_id: string, data: object) =>
+  API.post(`/reviews/ngo-reviews-student?application_id=${application_id}`, data)
+export const submitNgoReview = (application_id: string, data: object) =>
+  API.post(`/reviews/student-reviews-ngo?application_id=${application_id}`, data)
+export const getMyStudentReviews = () =>
+  API.get('/reviews/my-student-reviews')
+
+export const getPendingCertificates = (signal?: AbortSignal) =>
+  API.get('/admin/pending-certificates', { signal })
+export const issueCertificate = (applicationId: string) =>
+  API.patch(`/applications/${applicationId}/approve-completion`)
+export const submitWork = (applicationId: string, data: object) =>
+  API.post(`/applications/${applicationId}/submit-work`, data)
+export const reviewSubmission = (applicationId: string, action: string, feedback: string) =>
+  API.patch(`/applications/${applicationId}/review-submission?action=${action}&feedback=${encodeURIComponent(feedback)}`)
+// ─── ADMIN — USER MANAGEMENT ──────────────────────────────────────────────────
+export const getUserAuditLog = (userId: string) =>
+  API.get(`/admin/users/${userId}/audit-log`)
+export const cancelDeletion = (userId: string) =>
+  API.patch(`/admin/users/${userId}/cancel-deletion`)
+export const purgeUser = (userId: string) =>
+  API.delete(`/admin/users/${userId}/purge`)
+export const processScheduledDeletions = () =>
+  API.post('/admin/users/process-deletions')
+
+export const suspendUser    = (userId: string) =>
+  API.patch(`/admin/users/${userId}/suspend`)
+export const banUser        = (userId: string) =>
+  API.patch(`/admin/users/${userId}/ban`)
+export const reactivateUser = (userId: string) =>
+  API.patch(`/admin/users/${userId}/reactivate`)
+
+// ─── ADMIN — PROJECT MANAGEMENT ───────────────────────────────────────────────
+export const adminCloseProject = (projectId: string) =>
+  API.patch(`/admin/projects/${projectId}/close`)
+
+// ─── NGO — PROJECT MANAGEMENT ─────────────────────────────────────────────────
+export const ngoCloseProject = (projectId: string) =>
+  API.patch(`/ngo/projects/${projectId}/close`)
+
+// ─── STUDENT — APPLICATION MANAGEMENT ────────────────────────────────────────
+export const withdrawApplication = (applicationId: string) =>
+  API.patch(`/applications/${applicationId}/withdraw`)
+

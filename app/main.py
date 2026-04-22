@@ -1,6 +1,6 @@
 import uuid
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional
 
 from fastapi import FastAPI, Depends, HTTPException, status, Request, Query
@@ -260,6 +260,10 @@ def login(
     user = db.query(User).filter(User.email == data.email.lower()).first()
     if not user or not verify_password(data.password, user.hashed_password):
         raise HTTPException(status_code=400, detail="Invalid email or password")
+    if user.status == "suspended":
+        raise HTTPException(status_code=403, detail="Your account has been suspended. Contact support for assistance.")
+    if user.status == "banned":
+        raise HTTPException(status_code=403, detail="Your account has been permanently banned. Contact support for more information.")
 
     user.last_login = datetime.utcnow()
     db.commit()
@@ -1274,6 +1278,276 @@ def approve_project(
     db.commit()
     return {"status": data.action, "project_id": str(project_id)}
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# ADMIN — SUSPEND / BAN / REACTIVATE USER
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.patch("/admin/users/{user_id}/suspend")
+def suspend_user(
+    user_id: uuid.UUID,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.id == current_user.id:
+        raise HTTPException(status_code=400, detail="Cannot suspend yourself")
+    if user.status == "suspended":
+        raise HTTPException(status_code=400, detail="User is already suspended")
+    old_status = user.status
+    user.status = "suspended"
+    create_notification(db, user.id, "account_suspended", "Account Suspended", "Your account has been suspended. Contact support for assistance.", None)
+    write_audit_log(db, admin_id=current_user.id, action="user_suspend", target_type="user", target_id=user_id, old_status=old_status, new_status="suspended")
+    db.commit()
+    return {"status": "suspended", "user_id": str(user_id)}
+
+
+@app.patch("/admin/users/{user_id}/ban")
+def ban_user(
+    user_id: uuid.UUID,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.id == current_user.id:
+        raise HTTPException(status_code=400, detail="Cannot ban yourself")
+    if user.status == "banned":
+        raise HTTPException(status_code=400, detail="User is already banned")
+    old_status = user.status
+    user.status = "banned"
+    user.deletion_scheduled_at = datetime.utcnow() + timedelta(days=30)
+    create_notification(db, user.id, "account_banned", "Account Banned", "Your account has been permanently banned. Your data will be deleted in 30 days. Contact support for more information.", None)
+    write_audit_log(db, admin_id=current_user.id, action="user_ban", target_type="user", target_id=user_id, old_status=old_status, new_status="banned", notes="Data deletion scheduled in 30 days")
+    db.commit()
+    return {"status": "banned", "user_id": str(user_id), "deletion_scheduled_at": user.deletion_scheduled_at.isoformat()}
+
+
+@app.patch("/admin/users/{user_id}/reactivate")
+def reactivate_user(
+    user_id: uuid.UUID,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.status == "active":
+        raise HTTPException(status_code=400, detail="User is already active")
+    old_status = user.status
+    user.status = "active"
+    create_notification(db, user.id, "account_reactivated", "Account Reactivated", "Your account has been reactivated. Welcome back!", None)
+    write_audit_log(db, admin_id=current_user.id, action="user_reactivate", target_type="user", target_id=user_id, old_status=old_status, new_status="active")
+    db.commit()
+    return {"status": "active", "user_id": str(user_id)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ADMIN — CANCEL SCHEDULED DELETION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.patch("/admin/users/{user_id}/cancel-deletion")
+def cancel_deletion(
+    user_id: uuid.UUID,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if not user.deletion_scheduled_at:
+        raise HTTPException(status_code=400, detail="No deletion scheduled for this user")
+    user.deletion_scheduled_at = None
+    create_notification(
+        db, user.id,
+        "deletion_cancelled",
+        "Account Deletion Cancelled",
+        "The scheduled deletion of your account has been cancelled by an administrator.",
+        None
+    )
+    write_audit_log(
+        db,
+        admin_id=current_user.id,
+        action="deletion_cancelled",
+        target_type="user",
+        target_id=user_id,
+        old_status=user.status,
+        new_status=user.status,
+        notes="Scheduled deletion cancelled"
+    )
+    db.commit()
+    return {"status": "deletion_cancelled", "user_id": str(user_id)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ADMIN — PURGE USER (immediate permanent delete, only for banned users)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.delete("/admin/users/{user_id}/purge")
+def purge_user(
+    user_id: uuid.UUID,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.status != "banned":
+        raise HTTPException(status_code=400, detail="Only banned users can be purged")
+    if user.id == current_user.id:
+        raise HTTPException(status_code=400, detail="Cannot purge yourself")
+    write_audit_log(
+        db,
+        admin_id=current_user.id,
+        action="user_purged",
+        target_type="user",
+        target_id=user_id,
+        old_status=user.status,
+        new_status="deleted",
+        notes=f"User {user.email} permanently deleted"
+    )
+    db.commit()
+    db.delete(user)
+    db.commit()
+    return {"status": "purged", "user_id": str(user_id)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ADMIN — PROCESS EXPIRED DELETIONS (run periodically or on demand)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.post("/admin/users/process-deletions")
+def process_scheduled_deletions(
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    expired = db.query(User).filter(
+        User.status == "banned",
+        User.deletion_scheduled_at <= datetime.utcnow()
+    ).all()
+    deleted = []
+    for user in expired:
+        write_audit_log(
+            db,
+            admin_id=current_user.id,
+            action="user_auto_purged",
+            target_type="user",
+            target_id=user.id,
+            old_status=user.status,
+            new_status="deleted",
+            notes=f"Auto-deleted after 30-day grace period: {user.email}"
+        )
+        deleted.append(str(user.id))
+        db.delete(user)
+    db.commit()
+    return {"deleted_count": len(deleted), "deleted_user_ids": deleted}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ADMIN — FORCE-CLOSE ANY PROJECT
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.patch("/admin/projects/{project_id}/close")
+def admin_close_project(
+    project_id: uuid.UUID,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project.project_status == "closed":
+        raise HTTPException(status_code=400, detail="Project is already closed")
+    old_status = project.project_status
+    project.project_status = "closed"
+    # Cascade — withdraw all active applications
+    active_apps = db.query(Application).filter(
+        Application.project_id == project_id,
+        Application.status.in_(["applied", "shortlisted", "selected"])
+    ).all()
+    for app in active_apps:
+        app.status = "withdrawn"
+        create_notification(
+            db, app.student.user_id,
+            "application_withdrawn",
+            "Project Closed",
+            f"The project '{project.project_name}' has been closed. Your application has been withdrawn.",
+            "/student?tab=applications"
+        )
+    create_notification(db, project.ngo.user_id, "project_closed", f"Project Closed: {project.project_name}", "Your project has been closed by an administrator.", "/ngo?tab=projects")
+    write_audit_log(db, admin_id=current_user.id, action="project_close", target_type="project", target_id=project_id, old_status=old_status, new_status="closed", notes=f"{len(active_apps)} applications withdrawn")
+    db.commit()
+    return {"status": "closed", "project_id": str(project_id), "applications_withdrawn": len(active_apps)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NGO — CLOSE THEIR OWN PROJECT
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.patch("/ngo/projects/{project_id}/close")
+def ngo_close_project(
+    project_id: uuid.UUID,
+    current_user: User = Depends(require_ngo),
+    db: Session = Depends(get_db)
+):
+    ngo = db.query(NgoProfile).filter(NgoProfile.user_id == current_user.id).first()
+    if not ngo:
+        raise HTTPException(status_code=404, detail="NGO profile not found")
+    project = db.query(Project).filter(Project.id == project_id, Project.ngo_id == ngo.id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found or not owned by you")
+    if project.project_status == "closed":
+        raise HTTPException(status_code=400, detail="Project is already closed")
+    old_status = project.project_status
+    project.project_status = "closed"
+    # Cascade — withdraw all active applications
+    active_apps = db.query(Application).filter(
+        Application.project_id == project_id,
+        Application.status.in_(["applied", "shortlisted", "selected"])
+    ).all()
+    for app in active_apps:
+        app.status = "withdrawn"
+        create_notification(
+            db, app.student.user_id,
+            "application_withdrawn",
+            "Project Closed",
+            f"The project '{project.project_name}' has been closed by the organisation. Your application has been withdrawn.",
+            "/student?tab=applications"
+        )
+    write_audit_log(db, admin_id=current_user.id, action="project_close_by_ngo", target_type="project", target_id=project_id, old_status=old_status, new_status="closed", notes=f"{len(active_apps)} applications withdrawn")
+    db.commit()
+    return {"status": "closed", "project_id": str(project_id), "applications_withdrawn": len(active_apps)}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STUDENT — WITHDRAW APPLICATION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.patch("/applications/{application_id}/withdraw")
+def withdraw_application(
+    application_id: uuid.UUID,
+    current_user: User = Depends(require_student),
+    db: Session = Depends(get_db)
+):
+    student = db.query(StudentProfile).filter(StudentProfile.user_id == current_user.id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student profile not found")
+    application = db.query(Application).filter(Application.application_id == application_id, Application.student_id == student.id).first()
+    if not application:
+        raise HTTPException(status_code=404, detail="Application not found or not yours")
+    if application.status in ("completed", "withdrawn"):
+        raise HTTPException(status_code=400, detail=f"Cannot withdraw an application with status '{application.status}'")
+    old_status = application.status
+    application.status = "withdrawn"
+    create_notification(db, application.project.ngo.user_id, "application_withdrawn", "Application Withdrawn", f"A student has withdrawn their application from '{application.project.project_name}'.", "/ngo?tab=applications")
+    write_audit_log(db, admin_id=current_user.id, action="application_withdraw", target_type="application", target_id=application_id, old_status=old_status, new_status="withdrawn")
+    db.commit()
+    return {"status": "withdrawn", "application_id": str(application_id)}
+
+
+
+
+
 
 @app.get(
     "/admin/queues/personal-projects",
@@ -1399,6 +1673,25 @@ def admin_impact_dashboard(
         "award_categories":       db.query(AwardCategory).count(),
     }
 
+
+@app.get("/admin/users/{user_id}/audit-log")
+def get_user_audit_log(
+    user_id: uuid.UUID,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    result = db.execute(text("""
+        SELECT
+            a.id, a.action, a.target_type, a.target_id,
+            a.old_status, a.new_status, a.notes, a.created_at,
+            u.first_name || ' ' || u.last_name AS admin_name
+        FROM admin_audit_log a
+        JOIN users u ON a.admin_id = u.id
+        WHERE a.target_id = :user_id AND a.target_type = 'user'
+        ORDER BY a.created_at DESC
+        LIMIT 20
+    """), {"user_id": str(user_id)}).fetchall()
+    return {"logs": [dict(row._mapping) for row in result]}
 
 @app.get("/admin/audit-log")
 def get_audit_log(

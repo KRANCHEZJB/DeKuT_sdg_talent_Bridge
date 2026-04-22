@@ -12,7 +12,10 @@ const STATUS_MAP: Record<string, { color: string; bg: string; border: string; la
   selected:            { color: '#4ADE80', bg: 'rgba(0,166,81,0.15)',   border: 'rgba(0,166,81,0.3)',   label: 'Selected' },
   rejected:            { color: '#FC8181', bg: 'rgba(229,62,62,0.15)',  border: 'rgba(229,62,62,0.3)',  label: 'Rejected' },
   completed:           { color: '#A78BFA', bg: 'rgba(167,139,250,0.15)', border: 'rgba(167,139,250,0.3)', label: 'Completed' },
-  officially_complete: { color: '#A78BFA', bg: 'rgba(167,139,250,0.15)', border: 'rgba(167,139,250,0.3)', label: 'Complete' },
+  officially_complete:  { color: '#A78BFA', bg: 'rgba(167,139,250,0.15)', border: 'rgba(167,139,250,0.3)', label: 'Complete' },
+  work_submitted:       { color: '#60B4F0', bg: 'rgba(10,110,189,0.15)',  border: 'rgba(10,110,189,0.3)',  label: 'Work Submitted' },
+  revision_requested:   { color: '#FDB913', bg: 'rgba(253,185,19,0.15)', border: 'rgba(253,185,19,0.3)', label: 'Revision Requested' },
+  pending_certificate:  { color: '#A78BFA', bg: 'rgba(167,139,250,0.15)', border: 'rgba(167,139,250,0.3)', label: 'Certificate Pending' },
 
   // Project statuses
   open:               { color: '#4ADE80', bg: 'rgba(0,166,81,0.15)',   border: 'rgba(0,166,81,0.3)',   label: 'Open' },
