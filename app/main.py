@@ -719,7 +719,7 @@ def update_application_status(
 # WORK SUBMISSIONS
 # ═══════════════════════════════════════════════════════════════════════════════
 @app.post("/applications/{application_id}/submit-work", response_model=WorkSubmissionRead)
-def submit_work(application_id: uuid.UUID, data: WorkSubmissionCreate, current_user: User = Depends(require_student), db: Session = Depends(get_db)):
+def submit_work(application_id: uuid.UUID, data: WorkSubmissionCreate, current_user: User = Depends(require_verified_student), db: Session = Depends(get_db)):
     student = db.query(StudentProfile).filter(StudentProfile.user_id == current_user.id).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student profile not found")
@@ -807,12 +807,22 @@ def review_submission(
     current_user: User = Depends(require_ngo),
     db: Session = Depends(get_db)
 ):
+    ngo = db.query(NgoProfile).filter(NgoProfile.user_id == current_user.id).first()
+    if not ngo:
+        raise HTTPException(status_code=404, detail="NGO profile not found")
     application = db.query(Application).filter(Application.application_id == application_id).first()
     if not application:
         raise HTTPException(status_code=404, detail="Application not found")
+    project = db.query(Project).filter(Project.id == application.project_id, Project.ngo_id == ngo.id).first()
+    if not project:
+        raise HTTPException(status_code=403, detail="You do not own this project")
+    if application.status != "work_submitted":
+        raise HTTPException(status_code=400, detail="Can only review work that has been submitted")
     submission = db.query(WorkSubmission).filter(WorkSubmission.application_id == application_id).first()
     if not submission:
         raise HTTPException(status_code=404, detail="No submission found")
+    if action not in ("approve", "revision"):
+        raise HTTPException(status_code=400, detail="Action must be 'approve' or 'revision'")
     if action == "approve":
         application.status = "pending_certificate"
         submission.ngo_feedback = feedback
@@ -874,7 +884,7 @@ def submit_personal_project(
 
 @app.get("/personal-projects/mine", response_model=List[PersonalProjectRead])
 def get_my_personal_projects(
-    current_user: User = Depends(require_student),
+    current_user: User = Depends(require_verified_student),
     db: Session = Depends(get_db)
 ):
     student = db.query(StudentProfile).filter(
@@ -1558,7 +1568,7 @@ def admin_ip_queue(
     db: Session = Depends(get_db)
 ):
     return db.query(PersonalProject).filter(
-        PersonalProject.status == "submitted"
+        PersonalProject.status.in_(["submitted", "ip_recorded"])
     ).order_by(PersonalProject.created_at.asc()).all()
 
 
@@ -1648,6 +1658,43 @@ def approve_showcase(
     db.commit()
     return {"status": "showcase_approved"}
 
+
+@app.patch("/personal-projects/{project_id}/reject")
+def reject_personal_project(
+    project_id: uuid.UUID,
+    reason: str,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    project = db.query(PersonalProject).filter(PersonalProject.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project.status not in ("submitted", "ip_recorded"):
+        raise HTTPException(status_code=400, detail="Can only reject submitted or ip_recorded projects")
+    if not reason or not reason.strip():
+        raise HTTPException(status_code=400, detail="Rejection reason is required")
+    old_status = project.status
+    project.status = "rejected"
+    project.rejection_reason = reason.strip()
+    create_notification(
+        db, project.student.user_id,
+        "project_rejected",
+        "❌ Personal Project Rejected",
+        f"Your project '{project.title}' was not approved. Reason: {reason.strip()}",
+        "/student?tab=personal"
+    )
+    write_audit_log(
+        db,
+        admin_id=current_user.id,
+        action="reject_personal_project",
+        target_type="personal_project",
+        target_id=project_id,
+        old_status=old_status,
+        new_status="rejected",
+        notes=reason.strip()
+    )
+    db.commit()
+    return {"status": "rejected", "project_id": str(project_id)}
 
 @app.get("/admin/impact")
 def admin_impact_dashboard(

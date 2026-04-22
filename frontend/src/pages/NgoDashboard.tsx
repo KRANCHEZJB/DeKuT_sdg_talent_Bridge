@@ -10,7 +10,7 @@ import {
   getMyThreads, getThread, sendMessage, closeThread,
   raiseDispute, getMyDisputes,
   createBootcamp, getBootcamps,
-  submitStudentReview, reviewSubmission,
+  submitStudentReview, reviewSubmission, getSubmission,
   ngoCloseProject, showToast
 } from '../api/api'
 
@@ -82,6 +82,8 @@ const NgoDashboard = () => {
   const [reviewingAppId, setReviewingAppId] = useState<string | null>(null)
   const [submittingReview, setSubmittingReview] = useState(false)
   const [reviewingSubmission, setReviewingSubmission] = useState<{ appId: string; action: string } | null>(null)
+  const [submissionDetails, setSubmissionDetails] = useState<{ description: string; deliverable_url?: string; hours_worked?: number } | null>(null)
+  const [loadingSubmission, setLoadingSubmission] = useState(false)
   const [submissionFeedback, setSubmissionFeedback] = useState("")
   const [submittingSubmissionReview, setSubmittingSubmissionReview] = useState(false)
   const [notifications, setNotifications] = useState<Notification[]>([])
@@ -199,6 +201,7 @@ const NgoDashboard = () => {
       showToast(reviewingSubmission.action === "approve" ? "Marked complete! Awaiting admin certificate." : "Revision requested.", "success")
       setReviewingSubmission(null)
       setSubmissionFeedback("")
+      setSubmissionDetails(null)
       loadData()
     } catch { showToast("Failed to update submission", "error") }
     finally { setSubmittingSubmissionReview(false) }
@@ -700,9 +703,17 @@ const NgoDashboard = () => {
                   )}
                   {app.status === 'work_submitted' && (
                     <>
-                      <button onClick={() => setReviewingSubmission({ appId: app.application_id, action: 'approve' })}
+                      <button onClick={async () => {
+                          setReviewingSubmission({ appId: app.application_id, action: 'approve' })
+                          setLoadingSubmission(true)
+                          try { const r = await getSubmission(app.application_id); setSubmissionDetails(r.data) } catch { setSubmissionDetails(null) } finally { setLoadingSubmission(false) }
+                        }}
                         style={{ padding: '7px 14px', borderRadius: '8px', border: '1px solid rgba(74,222,128,0.3)', background: 'rgba(74,222,128,0.15)', color: '#4ADE80', cursor: 'pointer', fontFamily: 'Inter, sans-serif', fontSize: '12px', fontWeight: 700 }}>✅ Mark Complete</button>
-                      <button onClick={() => setReviewingSubmission({ appId: app.application_id, action: 'revision' })}
+                      <button onClick={async () => {
+                          setReviewingSubmission({ appId: app.application_id, action: 'revision' })
+                          setLoadingSubmission(true)
+                          try { const r = await getSubmission(app.application_id); setSubmissionDetails(r.data) } catch { setSubmissionDetails(null) } finally { setLoadingSubmission(false) }
+                        }}
                         style={{ padding: '7px 14px', borderRadius: '8px', border: '1px solid rgba(253,185,19,0.3)', background: 'rgba(253,185,19,0.15)', color: '#FDB913', cursor: 'pointer', fontFamily: 'Inter, sans-serif', fontSize: '12px', fontWeight: 700 }}>🔄 Request Revision</button>
                     </>
                   )}
@@ -1251,6 +1262,24 @@ const [bootcamps, setBootcamps] = useState<any[]>([])
                 ? 'Confirm the student has completed the project. An admin will issue the certificate.'
                 : 'Describe what the student needs to revise or improve.'}
             </p>
+            {loadingSubmission && (
+              <p style={{ color: '#94A3B8', fontSize: '12px', marginBottom: '12px' }}>⏳ Loading submission...</p>
+            )}
+            {submissionDetails && (
+              <div style={{ background: 'rgba(96,180,240,0.07)', border: '1px solid rgba(96,180,240,0.2)', borderRadius: '10px', padding: '14px', marginBottom: '16px' }}>
+                <p style={{ color: '#60B4F0', fontSize: '12px', fontWeight: 700, marginBottom: '8px' }}>📋 Student Submission</p>
+                <p style={{ color: '#F1F5F9', fontSize: '13px', lineHeight: 1.6, marginBottom: '8px' }}>{submissionDetails.description}</p>
+                {submissionDetails.deliverable_url && (
+                  <a href={submissionDetails.deliverable_url} target="_blank" rel="noreferrer"
+                    style={{ color: '#4ADE80', fontSize: '12px', display: 'block', marginBottom: '6px', wordBreak: 'break-all' }}>
+                    🔗 {submissionDetails.deliverable_url}
+                  </a>
+                )}
+                {submissionDetails.hours_worked && (
+                  <p style={{ color: '#94A3B8', fontSize: '12px' }}>⏱ Hours worked: {submissionDetails.hours_worked}</p>
+                )}
+              </div>
+            )}
             <div style={{ marginBottom: '16px' }}>
               <label style={{ color: '#94A3B8', fontSize: '12px', display: 'block', marginBottom: '6px' }}>
                 {reviewingSubmission.action === 'approve' ? 'FEEDBACK (optional)' : 'REVISION NOTES *'}
@@ -1264,7 +1293,7 @@ const [bootcamps, setBootcamps] = useState<any[]>([])
                 style={{ flex: 1, padding: '10px', background: reviewingSubmission.action === 'approve' ? 'linear-gradient(135deg,#4ADE80,#22C55E)' : 'linear-gradient(135deg,#FDB913,#F59E0B)', border: 'none', borderRadius: '8px', color: '#000', fontWeight: 700, cursor: 'pointer', fontSize: '14px', opacity: submittingSubmissionReview ? 0.5 : 1 }}>
                 {submittingSubmissionReview ? '⏳...' : reviewingSubmission.action === 'approve' ? '✅ Confirm' : '🔄 Send Revision Request'}
               </button>
-              <button onClick={() => { setReviewingSubmission(null); setSubmissionFeedback("") }}
+              <button onClick={() => { setReviewingSubmission(null); setSubmissionFeedback(""); setSubmissionDetails(null) }}
                 style={{ padding: '10px 16px', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: '#F1F5F9', fontWeight: 600, cursor: 'pointer', fontSize: '14px' }}>Cancel</button>
             </div>
           </div>

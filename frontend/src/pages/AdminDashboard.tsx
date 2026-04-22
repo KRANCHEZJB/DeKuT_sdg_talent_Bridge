@@ -8,7 +8,7 @@ import {
   getProjectQueue, getIpQueue, getAuditLog,
   listStudents, listOrganizations,
   verifyStudent, approveOrganization, approveProject,
-  recordIp, approveShowcase, bulkVerifyStudents,
+  recordIp, approveShowcase, rejectPersonalProject, bulkVerifyStudents,
   getAdminImpact,
   showToast,
   getAllDisputes, resolveDispute,
@@ -235,6 +235,15 @@ export default function AdminDashboard() {
       refetchIP()
     } catch (err: any) {
       showToast(err.response?.data?.detail || 'Could not approve showcase', 'error')
+    }
+  }
+  const handleRejectPersonalProject = async (projectId: string, reason: string) => {
+    try {
+      await rejectPersonalProject(projectId, reason)
+      showToast('Project rejected', 'success')
+      refetchIP()
+    } catch (err: any) {
+      showToast(err.response?.data?.detail || 'Could not reject project', 'error')
     }
   }
 
@@ -696,7 +705,23 @@ export default function AdminDashboard() {
                 </div>
                 <StatusBadge status={p.status} size="sm" />
               </div>
-              <p style={{ fontSize: '13px', color: '#94A3B8', lineHeight: 1.6, marginBottom: '14px' }}>{p.problem_statement}</p>
+              <p style={{ fontSize: '13px', color: '#94A3B8', lineHeight: 1.6, marginBottom: '8px' }}>{p.problem_statement}</p>
+              <p style={{ fontSize: '13px', color: '#CBD5E1', lineHeight: 1.6, marginBottom: '8px' }}><span style={{ color: '#60B4F0', fontWeight: 600 }}>Solution: </span>{p.solution_description}</p>
+              <p style={{ fontSize: '13px', color: '#CBD5E1', lineHeight: 1.6, marginBottom: '10px' }}><span style={{ color: '#4ADE80', fontWeight: 600 }}>Outcome: </span>{p.outcome}</p>
+              {p.technologies?.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginBottom: '10px' }}>
+                  {p.technologies.map((t: string) => (
+                    <span key={t} style={{ background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.2)', color: '#A78BFA', padding: '3px 8px', borderRadius: '999px', fontSize: '11px', fontWeight: 600 }}>{t}</span>
+                  ))}
+                </div>
+              )}
+              {p.evidence_urls?.length > 0 && (
+                <div style={{ marginBottom: '10px' }}>
+                  {p.evidence_urls.map((url: string, i: number) => (
+                    <a key={i} href={url} target="_blank" rel="noreferrer" style={{ color: '#4ADE80', fontSize: '12px', display: 'block', marginBottom: '4px', wordBreak: 'break-all' }}>🔗 {url}</a>
+                  ))}
+                </div>
+              )}
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                 {p.status === 'submitted' && (
                   <button onClick={() => setConfirmModal({ title: 'Record IP', message: `Record IP reference for "${p.title}"?`, onConfirm: () => handleRecordIp(p.id) })}
@@ -705,6 +730,10 @@ export default function AdminDashboard() {
                 {(p.status === 'ip_recorded' || p.status === 'submitted') && (
                   <button onClick={() => setConfirmModal({ title: 'Approve for Showcase', message: `Add "${p.title}" to the public showcase?`, onConfirm: () => handleApproveShowcase(p.id) })}
                     style={actionBtn('#4ADE80', 'rgba(0,166,81,0.15)')}>🌟 Approve Showcase</button>
+                )}
+                {(p.status === 'submitted' || p.status === 'ip_recorded') && (
+                  <button onClick={() => setRejectModal({ title: `Reject "${p.title}"`, onConfirm: (reason) => handleRejectPersonalProject(p.id, reason) })}
+                    style={actionBtn('#FC8181', 'rgba(229,62,62,0.15)')}>❌ Reject</button>
                 )}
               </div>
             </div>

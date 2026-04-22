@@ -206,6 +206,8 @@ export const recordIp             = (projectId: string) =>
   API.patch(`/personal-projects/${projectId}/record-ip`)
 export const approveShowcase      = (projectId: string) =>
   API.patch(`/personal-projects/${projectId}/approve-showcase`)
+export const rejectPersonalProject = (projectId: string, reason: string) =>
+  API.patch(`/personal-projects/${projectId}/reject?reason=${encodeURIComponent(reason)}`)
 export const listStudents         = (signal?: AbortSignal) =>
   API.get('/students', { signal })
 export const listOrganizations    = (signal?: AbortSignal) =>
@@ -269,6 +271,8 @@ export const issueCertificate = (applicationId: string) =>
   API.patch(`/applications/${applicationId}/approve-completion`)
 export const submitWork = (applicationId: string, data: object) =>
   API.post(`/applications/${applicationId}/submit-work`, data)
+export const getSubmission = (applicationId: string) =>
+  API.get(`/applications/${applicationId}/submission`)
 export const reviewSubmission = (applicationId: string, action: string, feedback: string) =>
   API.patch(`/applications/${applicationId}/review-submission?action=${action}&feedback=${encodeURIComponent(feedback)}`)
 // ─── ADMIN — USER MANAGEMENT ──────────────────────────────────────────────────

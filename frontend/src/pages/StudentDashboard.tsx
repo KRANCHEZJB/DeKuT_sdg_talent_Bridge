@@ -10,7 +10,7 @@ import {
 showToast as apiToast,
   getMyThreads, getThread, sendMessage, closeThread, createThread,
   raiseDispute, getMyDisputes, submitNgoReview, submitWork,
-  withdrawApplication
+  withdrawApplication, getAwards
 } from '../api/api'
 
 interface Project {
@@ -48,7 +48,8 @@ const TABS = [
   { key: 'projects',       icon: '🔍', label: 'Browse Projects' },
   { key: 'applications',   icon: '📋', label: 'My Applications' },
   { key: 'personal',       icon: '💡', label: 'Personal Projects' },
-  { key: 'certificates',   icon: '🏆', label: 'Certificates' },
+  { key: 'certificates',   icon: '🎓', label: 'Certificates' },
+  { key: 'awards',          icon: '🏅', label: 'My Awards' },
   { key: 'letters',        icon: '📄', label: 'Rec. Letters' },
   { key: 'messages',       icon: '💬', label: 'Messages' },
   { key: 'disputes',       icon: '⚖️', label: 'Disputes' },
@@ -80,6 +81,7 @@ const StudentDashboard = () => {
   const [profile, setProfile] = useState<StudentProfile | null>(null)
   const [personalProjects, setPersonalProjects] = useState<PersonalProject[]>([])
   const [certificates, setCertificates] = useState<Certificate[]>([])
+  const [awards, setAwards] = useState<any[]>([])
   const [letterRequests, setLetterRequests] = useState<LetterRequest[]>([])
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [loading, setLoading] = useState(true)
@@ -115,7 +117,7 @@ const StudentDashboard = () => {
     try {
       const [projRes, appRes, profileRes, ppRes, certRes, letterRes, notifRes] = await Promise.allSettled([
         getProjects(), getMyApplications(), getStudentProfile(),
-        getMyPersonalProjects(), getMyCertificates(), getMyLetterRequests(), getNotifications()
+        getMyPersonalProjects(), getMyCertificates(), getMyLetterRequests(), getNotifications(), getAwards()
       ])
       if (projRes.status === 'fulfilled') setProjects(projRes.value.data)
       if (appRes.status === 'fulfilled') setApplications(appRes.value.data)
@@ -177,11 +179,12 @@ const StudentDashboard = () => {
     try {
       await submitPersonalProject({
         ...ppForm,
-        technologies: ppForm.technologies.split(',').map(t => t.trim()).filter(Boolean)
+        technologies: ppForm.technologies.split(',').map(t => t.trim()).filter(Boolean),
+        evidence_urls: ppForm.evidence_urls ? ppForm.evidence_urls.split(',').map((u: string) => u.trim()).filter(Boolean) : []
       })
       showToast('Personal project submitted!', 'success')
       setShowPpForm(false)
-      setPpForm({ title:'', problem_statement:'', solution_description:'', sdg_focus:'', technologies:'', outcome:'', is_commercially_sensitive: false })
+      setPpForm({ title:'', problem_statement:'', solution_description:'', sdg_focus:'', technologies:'', outcome:'', evidence_urls:'', is_commercially_sensitive: false })
       await loadData()
     } catch (err: any) {
       showToast(err.response?.data?.detail || 'Could not submit project', 'error')
@@ -529,6 +532,10 @@ const StudentDashboard = () => {
               <label style={label}>Outcome / Results *</label>
               <textarea style={{ ...inputStyle, resize: 'vertical' }} rows={3} placeholder="What was achieved?" value={ppForm.outcome} onChange={e => setPpForm({...ppForm, outcome: e.target.value})} />
             </div>
+            <div>
+              <label style={label}>Evidence URLs (comma separated)</label>
+              <input style={inputStyle} placeholder="e.g. https://github.com/..., https://drive.google.com/..." value={ppForm.evidence_urls} onChange={e => setPpForm({...ppForm, evidence_urls: e.target.value})} />
+            </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <input type="checkbox" id="sensitive" checked={ppForm.is_commercially_sensitive} onChange={e => setPpForm({...ppForm, is_commercially_sensitive: e.target.checked})} />
               <label htmlFor="sensitive" style={{ ...label, marginBottom: 0, textTransform: 'none', fontSize: '13px', color: '#F1F5F9' }}>🔒 Commercially Sensitive</label>
@@ -560,11 +567,26 @@ const StudentDashboard = () => {
                 </div>
                 <span style={{ background: statusBg(p.status), border: `1px solid ${statusColor(p.status)}40`, color: statusColor(p.status), padding: '5px 12px', borderRadius: '999px', fontSize: '12px', fontWeight: 600 }}>{p.status.replace(/_/g,' ')}</span>
               </div>
-              <p style={{ fontSize: '13px', color: '#94A3B8', lineHeight: 1.6, marginBottom: '10px' }}>{p.problem_statement}</p>
+              <p style={{ fontSize: '13px', color: '#94A3B8', lineHeight: 1.6, marginBottom: '8px' }}>{p.problem_statement}</p>
+              <p style={{ fontSize: '13px', color: '#CBD5E1', lineHeight: 1.6, marginBottom: '8px' }}><span style={{ color: '#60B4F0', fontWeight: 600 }}>Solution: </span>{p.solution_description}</p>
+              <p style={{ fontSize: '13px', color: '#CBD5E1', lineHeight: 1.6, marginBottom: '8px' }}><span style={{ color: '#4ADE80', fontWeight: 600 }}>Outcome: </span>{p.outcome}</p>
+              {p.rejection_reason && (
+                <div style={{ background: 'rgba(229,62,62,0.08)', border: '1px solid rgba(229,62,62,0.2)', borderRadius: '8px', padding: '10px 14px', marginBottom: '8px' }}>
+                  <p style={{ color: '#FC8181', fontSize: '12px', fontWeight: 700, marginBottom: '4px' }}>❌ Rejection Reason</p>
+                  <p style={{ color: '#FCA5A5', fontSize: '13px' }}>{p.rejection_reason}</p>
+                </div>
+              )}
               {p.technologies?.length > 0 && (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginBottom: '8px' }}>
                   {p.technologies.map(t => (
                     <span key={t} style={{ background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.2)', color: '#A78BFA', padding: '3px 8px', borderRadius: '999px', fontSize: '11px', fontWeight: 600 }}>{t}</span>
+                  ))}
+                </div>
+              )}
+              {p.evidence_urls?.length > 0 && (
+                <div style={{ marginTop: '6px' }}>
+                  {p.evidence_urls.map((url: string, i: number) => (
+                    <a key={i} href={url} target="_blank" rel="noreferrer" style={{ color: '#4ADE80', fontSize: '12px', display: 'block', marginBottom: '4px', wordBreak: 'break-all' }}>🔗 {url}</a>
                   ))}
                 </div>
               )}
@@ -602,6 +624,45 @@ const StudentDashboard = () => {
     </div>
   )
 
+
+  const renderAwards = () => (
+    <div>
+      <div style={{ marginBottom: '24px' }}>
+        <h1 style={{ fontSize: '24px', fontWeight: 800, marginBottom: '4px' }}>My Awards</h1>
+        <p style={{ color: '#94A3B8', fontSize: '14px' }}>Awards and recognition you have received</p>
+      </div>
+      {awards.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '60px 20px', color: '#94A3B8' }}>
+          <div style={{ fontSize: '48px', marginBottom: '16px' }}>🏅</div>
+          <p style={{ fontSize: '16px', fontWeight: 600, color: '#F1F5F9', marginBottom: '8px' }}>No awards yet</p>
+          <p>Keep contributing — awards are issued by the admin team</p>
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px,1fr))', gap: '16px' }}>
+          {awards.map(award => (
+            <div key={award.id} style={{ ...card, background: 'linear-gradient(135deg, rgba(253,185,19,0.08), rgba(167,139,250,0.06))', border: '1px solid rgba(253,185,19,0.25)', position: 'relative', overflow: 'hidden' }}>
+              <div style={{ position: 'absolute', top: 0, right: 0, width: '80px', height: '80px', background: 'radial-gradient(circle at top right, rgba(253,185,19,0.15), transparent)', borderRadius: '0 16px 0 80px' }} />
+              <div style={{ fontSize: '40px', marginBottom: '12px' }}>🏅</div>
+              <h3 style={{ fontSize: '16px', fontWeight: 700, marginBottom: '4px', color: '#FDB913' }}>{award.category_name || 'Award'}</h3>
+              <p style={{ fontSize: '13px', color: '#94A3B8', marginBottom: '12px' }}>Period: {award.award_period}</p>
+              {award.cash_amount > 0 && (
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'rgba(74,222,128,0.1)', border: '1px solid rgba(74,222,128,0.2)', borderRadius: '8px', padding: '6px 12px', marginBottom: '12px' }}>
+                  <span style={{ color: '#4ADE80', fontWeight: 700, fontSize: '14px' }}>KES {Number(award.cash_amount).toLocaleString()}</span>
+                </div>
+              )}
+              <p style={{ fontSize: '11px', color: '#475569' }}>Issued: {new Date(award.issued_at).toLocaleDateString('en-KE', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
+              {award.certificate_url && (
+                <a href={award.certificate_url} target="_blank" rel="noreferrer"
+                  style={{ display: 'inline-block', marginTop: '12px', color: '#A78BFA', fontSize: '13px', fontWeight: 600, textDecoration: 'none' }}>
+                  📜 View Certificate →
+                </a>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
   const renderLetters = () => (
     <div>
       <div style={{ marginBottom: '24px' }}>
@@ -1051,6 +1112,7 @@ const TAB_RENDER: Record<string, () => React.ReactElement> = {
     applications:  renderApplications,
     personal:      renderPersonalProjects,
     certificates:  renderCertificates,
+    awards:        renderAwards,
     letters:       renderLetters,
     messages:      renderMessages,
     disputes:      renderDisputes,
@@ -1095,6 +1157,7 @@ const TAB_RENDER: Record<string, () => React.ReactElement> = {
               applications: applications.length,
               personal: personalProjects.length,
               certificates: certificates.length,
+              awards: awards.length,
               notifications: unreadNotifs,
               letters: letterRequests.length,
             }
