@@ -880,7 +880,7 @@ def get_pending_certificates(current_user: User = Depends(require_admin), db: Se
         student = db.query(StudentProfile).filter(StudentProfile.id == app.student_id).first()
         project = db.query(Project).filter(Project.id == app.project_id).first()
         submission = db.query(WorkSubmission).filter(WorkSubmission.application_id == app.application_id).first()
-            outcome = db.query(ProjectOutcome).filter(ProjectOutcome.application_id == app.application_id).first()
+        outcome = db.query(ProjectOutcome).filter(ProjectOutcome.application_id == app.application_id).first()
         reflection = db.query(StudentReflection).filter(StudentReflection.application_id == app.application_id).first()
         result.append({
             "application_id": str(app.application_id),
