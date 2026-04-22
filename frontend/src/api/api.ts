@@ -267,6 +267,10 @@ export const getMyStudentReviews = () =>
 
 export const getPendingCertificates = (signal?: AbortSignal) =>
   API.get('/admin/pending-certificates', { signal })
+export const submitOutcome = (applicationId: string, data: object) =>
+  API.post(`/applications/${applicationId}/outcome`, data)
+export const submitReflection = (applicationId: string, data: object) =>
+  API.post(`/applications/${applicationId}/reflection`, data)
 export const issueCertificate = (applicationId: string) =>
   API.patch(`/applications/${applicationId}/approve-completion`)
 export const submitWork = (applicationId: string, data: object) =>

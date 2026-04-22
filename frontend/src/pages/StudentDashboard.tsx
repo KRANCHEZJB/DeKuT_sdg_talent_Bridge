@@ -10,7 +10,7 @@ import {
 showToast as apiToast,
   getMyThreads, getThread, sendMessage, closeThread, createThread,
   raiseDispute, getMyDisputes, submitNgoReview, submitWork,
-  withdrawApplication, getAwards
+  withdrawApplication, getAwards, submitReflection
 } from '../api/api'
 
 interface Project {
@@ -82,6 +82,23 @@ const StudentDashboard = () => {
   const [personalProjects, setPersonalProjects] = useState<PersonalProject[]>([])
   const [certificates, setCertificates] = useState<Certificate[]>([])
   const [awards, setAwards] = useState<any[]>([])
+  const [reflectingAppId, setReflectingAppId] = useState<string | null>(null)
+  const [reflectionText, setReflectionText] = useState('')
+  const [submittingReflection, setSubmittingReflection] = useState(false)
+  const handleSubmitReflection = async () => {
+    if (!reflectingAppId || reflectionText.trim().length < 50) {
+      showToast('Reflection must be at least 50 characters', 'error'); return
+    }
+    setSubmittingReflection(true)
+    try {
+      await submitReflection(reflectingAppId, { confirmed: true, reflection_text: reflectionText.trim() })
+      showToast('Reflection submitted!', 'success')
+      setReflectingAppId(null)
+      setReflectionText('')
+    } catch (err: any) {
+      showToast(err.response?.data?.detail || 'Could not submit reflection', 'error')
+    } finally { setSubmittingReflection(false) }
+  }
   const [letterRequests, setLetterRequests] = useState<LetterRequest[]>([])
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [loading, setLoading] = useState(true)
@@ -624,6 +641,28 @@ const StudentDashboard = () => {
     </div>
   )
 
+
+
+  const renderReflectionModal = () => reflectingAppId ? (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+      <div style={{ background: '#0D1628', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '16px', padding: '28px', width: '100%', maxWidth: '520px' }}>
+        <h3 style={{ color: '#F1F5F9', fontWeight: 700, marginBottom: '6px', fontSize: '18px' }}>✍️ Project Reflection</h3>
+        <p style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '20px' }}>Write a reflection on what you learned and accomplished. Minimum 50 characters.</p>
+        <textarea rows={8} value={reflectionText} onChange={e => setReflectionText(e.target.value)}
+          placeholder="Describe what you learned, challenges you overcame, skills you developed, and how this project impacted you professionally..."
+          style={{ width: '100%', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '10px', padding: '12px', color: '#F1F5F9', fontSize: '13px', outline: 'none', resize: 'vertical', boxSizing: 'border-box', fontFamily: 'Inter, sans-serif', lineHeight: 1.6 }} />
+        <p style={{ fontSize: '11px', color: reflectionText.length < 50 ? '#FC8181' : '#4ADE80', marginTop: '6px', marginBottom: '16px' }}>{reflectionText.length} / 50 minimum characters</p>
+        <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+          <button onClick={() => { setReflectingAppId(null); setReflectionText('') }}
+            style={{ padding: '10px 20px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)', background: 'transparent', color: '#94A3B8', cursor: 'pointer', fontFamily: 'Inter, sans-serif', fontSize: '13px', fontWeight: 600 }}>Cancel</button>
+          <button onClick={handleSubmitReflection} disabled={submittingReflection || reflectionText.trim().length < 50}
+            style={{ padding: '10px 20px', borderRadius: '8px', border: 'none', background: '#0A6EBD', color: '#fff', cursor: 'pointer', fontFamily: 'Inter, sans-serif', fontSize: '13px', fontWeight: 700, opacity: (submittingReflection || reflectionText.trim().length < 50) ? 0.5 : 1 }}>
+            {submittingReflection ? '⏳ Submitting...' : '✍️ Submit Reflection'}
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null
 
   const renderAwards = () => (
     <div>

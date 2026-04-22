@@ -11,7 +11,8 @@ import {
   raiseDispute, getMyDisputes,
   createBootcamp, getBootcamps,
   submitStudentReview, reviewSubmission, getSubmission,
-  ngoCloseProject, showToast
+  ngoCloseProject, showToast,
+  submitOutcome,
 } from '../api/api'
 
 interface Project {
@@ -80,6 +81,34 @@ const NgoDashboard = () => {
   const [selectedProject, setSelectedProject] = useState<Project | null>(null)
   const [reviewForm, setReviewForm] = useState({ overall_rating: 5, review_text: '' })
   const [reviewingAppId, setReviewingAppId] = useState<string | null>(null)
+  const [outcomeAppId, setOutcomeAppId] = useState<string | null>(null)
+  const [submittingOutcome, setSubmittingOutcome] = useState(false)
+  const [outcomeForm, setOutcomeForm] = useState({
+    completion_date: new Date().toISOString().split('T')[0],
+    deliverables_received: '', quality_rating: 5, communication_rating: 5,
+    reliability_rating: 5, technical_skill_rating: 5, sdg_commitment_rating: 5,
+    written_review: '', sdg_impact_achieved: '', would_work_again: 'yes',
+    outcome_summary: '', evidence_urls: ''
+  })
+  const handleSubmitOutcome = async () => {
+    if (!outcomeAppId) return
+    if (!outcomeForm.deliverables_received.trim() || !outcomeForm.written_review.trim() ||
+        !outcomeForm.sdg_impact_achieved.trim() || !outcomeForm.outcome_summary.trim()) {
+      showToast('Please fill all required fields', 'error'); return
+    }
+    setSubmittingOutcome(true)
+    try {
+      await submitOutcome(outcomeAppId, {
+        ...outcomeForm,
+        evidence_urls: outcomeForm.evidence_urls ? outcomeForm.evidence_urls.split(',').map((u: string) => u.trim()).filter(Boolean) : []
+      })
+      showToast('Outcome report submitted!', 'success')
+      setOutcomeAppId(null)
+      loadData()
+    } catch (err: any) {
+      showToast(err.response?.data?.detail || 'Could not submit outcome', 'error')
+    } finally { setSubmittingOutcome(false) }
+  }
   const [submittingReview, setSubmittingReview] = useState(false)
   const [reviewingSubmission, setReviewingSubmission] = useState<{ appId: string; action: string } | null>(null)
   const [submissionDetails, setSubmissionDetails] = useState<{ description: string; deliverable_url?: string; hours_worked?: number } | null>(null)
@@ -717,9 +746,11 @@ const NgoDashboard = () => {
                         style={{ padding: '7px 14px', borderRadius: '8px', border: '1px solid rgba(253,185,19,0.3)', background: 'rgba(253,185,19,0.15)', color: '#FDB913', cursor: 'pointer', fontFamily: 'Inter, sans-serif', fontSize: '12px', fontWeight: 700 }}>🔄 Request Revision</button>
                     </>
                   )}
-                  {app.status === 'pending_certificate' && (
-                    <span style={{ padding: '7px 14px', borderRadius: '8px', border: '1px solid rgba(167,139,250,0.3)', background: 'rgba(167,139,250,0.15)', color: '#A78BFA', fontSize: '12px', fontWeight: 700 }}>🎓 Awaiting Admin Certificate</span>
-                  )}
+                  {app.status === 'pending_certificate' && (<>
+                    <span style={{ padding: '7px 14px', borderRadius: '8px', border: '1px solid rgba(167,139,250,0.3)', background: 'rgba(167,139,250,0.15)', color: '#A78BFA', fontSize: '12px', fontWeight: 700 }}>🎓 Awaiting Certificate</span>
+                    <button onClick={() => setOutcomeAppId(app.application_id)}
+                      style={{ padding: '7px 14px', borderRadius: '8px', border: '1px solid rgba(96,180,240,0.3)', background: 'rgba(96,180,240,0.15)', color: '#60B4F0', cursor: 'pointer', fontFamily: 'Inter, sans-serif', fontSize: '12px', fontWeight: 700 }}>📋 Submit Outcome Report</button>
+                  </>)}
                   {app.status === 'officially_complete' && (
                     <button onClick={() => setReviewingAppId(app.application_id)}
                       style={{ padding: '7px 14px', borderRadius: '8px', border: '1px solid rgba(253,185,19,0.3)', background: 'rgba(253,185,19,0.15)', color: '#FDB913', cursor: 'pointer', fontFamily: 'Inter, sans-serif', fontSize: '12px', fontWeight: 700 }}>⭐ Write Review</button>
@@ -1251,6 +1282,7 @@ const [bootcamps, setBootcamps] = useState<any[]>([])
           )}
         </main>
       {renderReviewModal()}
+      {renderOutcomeModal()}
       {reviewingSubmission && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
           <div style={{ background: '#1E293B', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '16px', padding: '28px', width: '420px', maxWidth: '90vw' }}>

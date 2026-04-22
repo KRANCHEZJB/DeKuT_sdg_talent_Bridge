@@ -756,6 +756,101 @@ def get_submission(application_id: uuid.UUID, current_user: User = Depends(get_c
         raise HTTPException(status_code=404, detail="No submission found")
     return submission
 
+
+@app.post("/applications/{application_id}/outcome", response_model=dict, status_code=201)
+def submit_project_outcome(
+    application_id: uuid.UUID,
+    data: ProjectOutcomeCreate,
+    current_user: User = Depends(require_ngo),
+    db: Session = Depends(get_db)
+):
+    ngo = db.query(NgoProfile).filter(NgoProfile.user_id == current_user.id).first()
+    if not ngo:
+        raise HTTPException(status_code=404, detail="NGO profile not found")
+    application = db.query(Application).filter(Application.application_id == application_id).first()
+    if not application:
+        raise HTTPException(status_code=404, detail="Application not found")
+    project = db.query(Project).filter(Project.id == application.project_id, Project.ngo_id == ngo.id).first()
+    if not project:
+        raise HTTPException(status_code=403, detail="You do not own this project")
+    if application.status not in ("pending_certificate", "officially_complete"):
+        raise HTTPException(status_code=400, detail="Outcome can only be submitted after work is approved")
+    existing = db.query(ProjectOutcome).filter(ProjectOutcome.application_id == application_id).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Outcome already submitted")
+    for r in [data.quality_rating, data.communication_rating, data.reliability_rating,
+              data.technical_skill_rating, data.sdg_commitment_rating]:
+        if not (1 <= r <= 5):
+            raise HTTPException(status_code=400, detail="All ratings must be between 1 and 5")
+    outcome = ProjectOutcome(
+        application_id=application_id,
+        completion_date=data.completion_date,
+        deliverables_received=data.deliverables_received,
+        quality_rating=data.quality_rating,
+        communication_rating=data.communication_rating,
+        reliability_rating=data.reliability_rating,
+        technical_skill_rating=data.technical_skill_rating,
+        sdg_commitment_rating=data.sdg_commitment_rating,
+        written_review=data.written_review,
+        sdg_impact_achieved=data.sdg_impact_achieved,
+        would_work_again=data.would_work_again,
+        outcome_summary=data.outcome_summary,
+        evidence_urls=data.evidence_urls or []
+    )
+    db.add(outcome)
+    student = db.query(StudentProfile).filter(StudentProfile.id == application.student_id).first()
+    if student:
+        create_notification(
+            db, student.user_id, "outcome_submitted",
+            "📋 NGO Outcome Report Submitted",
+            f"The NGO has submitted their outcome report for '{project.project_name}'. Please write your reflection.",
+            "/student?tab=applications"
+        )
+    db.commit()
+    return {"status": "outcome submitted"}
+
+@app.post("/applications/{application_id}/reflection", response_model=dict, status_code=201)
+def submit_student_reflection(
+    application_id: uuid.UUID,
+    data: StudentReflectionCreate,
+    current_user: User = Depends(require_student),
+    db: Session = Depends(get_db)
+):
+    student = db.query(StudentProfile).filter(StudentProfile.user_id == current_user.id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student profile not found")
+    application = db.query(Application).filter(
+        Application.application_id == application_id,
+        Application.student_id == student.id
+    ).first()
+    if not application:
+        raise HTTPException(status_code=404, detail="Application not found")
+    if application.status not in ("pending_certificate", "officially_complete"):
+        raise HTTPException(status_code=400, detail="Reflection can only be submitted after work is approved")
+    existing = db.query(StudentReflection).filter(StudentReflection.application_id == application_id).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Reflection already submitted")
+    if not data.reflection_text or len(data.reflection_text.strip()) < 50:
+        raise HTTPException(status_code=400, detail="Reflection must be at least 50 characters")
+    reflection = StudentReflection(
+        application_id=application_id,
+        confirmed=data.confirmed,
+        reflection_text=data.reflection_text.strip(),
+        is_disputed=data.is_disputed or False,
+        dispute_reason=data.dispute_reason
+    )
+    db.add(reflection)
+    admins = db.query(User).filter(User.role == "admin").all()
+    for admin in admins:
+        create_notification(
+            db, admin.id, "reflection_submitted",
+            "✍️ Student Reflection Submitted",
+            "A student has submitted their project reflection. Certificate queue updated.",
+            "/admin?tab=certificates"
+        )
+    db.commit()
+    return {"status": "reflection submitted"}
+
 @app.patch("/applications/{application_id}/approve-completion")
 def approve_completion(application_id: uuid.UUID, current_user: User = Depends(require_admin), db: Session = Depends(get_db)):
     application = db.query(Application).filter(Application.application_id == application_id).first()
@@ -785,6 +880,8 @@ def get_pending_certificates(current_user: User = Depends(require_admin), db: Se
         student = db.query(StudentProfile).filter(StudentProfile.id == app.student_id).first()
         project = db.query(Project).filter(Project.id == app.project_id).first()
         submission = db.query(WorkSubmission).filter(WorkSubmission.application_id == app.application_id).first()
+            outcome = db.query(ProjectOutcome).filter(ProjectOutcome.application_id == app.application_id).first()
+        reflection = db.query(StudentReflection).filter(StudentReflection.application_id == app.application_id).first()
         result.append({
             "application_id": str(app.application_id),
             "student_name": student.full_name if student else "Unknown",
@@ -796,6 +893,11 @@ def get_pending_certificates(current_user: User = Depends(require_admin), db: Se
             "deliverable_url": submission.deliverable_url if submission else None,
             "hours_worked": submission.hours_worked if submission else None,
             "ngo_feedback": submission.ngo_feedback if submission else None,
+            "has_outcome": outcome is not None,
+            "has_reflection": reflection is not None,
+            "outcome_summary": outcome.outcome_summary if outcome else None,
+            "quality_rating": outcome.quality_rating if outcome else None,
+            "reflection_text": reflection.reflection_text if reflection else None,
         })
     return result
 
