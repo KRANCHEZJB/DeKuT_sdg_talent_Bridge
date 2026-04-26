@@ -1011,6 +1011,28 @@ def submit_personal_project(
     db.add(project)
     db.commit()
     db.refresh(project)
+
+    # Gap 3 — Confirm receipt to student
+    create_notification(
+        db, current_user.id,
+        "project_submitted",
+        "📬 Project Submission Received",
+        f"Your project '{project.title}' has been submitted and is under review. You'll be notified on next steps.",
+        "/student?tab=personal"
+    )
+
+    # Gap 2 — Notify all admins of new submission
+    admins = db.query(User).filter(User.role == "admin").all()
+    for admin in admins:
+        create_notification(
+            db, admin.id,
+            "new_personal_project",
+            "📥 New Personal Project Submitted",
+            f"A new personal project '{project.title}' has been submitted and is awaiting review.",
+            "/admin?tab=personal-projects"
+        )
+
+    db.commit()
     return project
 
 
@@ -1243,7 +1265,7 @@ def get_unscored_applications(
     # Personal projects
     scored_pp_ids = {s.personal_project_id for s in db.query(ProjectScore).filter(ProjectScore.personal_project_id != None).all()}
     pps = db.query(PersonalProject).filter(
-        PersonalProject.status.in_(["approved", "completed", "showcase_approved"]),
+        PersonalProject.status.in_(["ip_recorded", "showcase_approved"]),
         ~PersonalProject.id.in_(scored_pp_ids)
     ).all()
     for p in pps:
@@ -1857,6 +1879,15 @@ def sign_adoption_agreement(
                     "🎉 Adoption Agreement Fully Executed",
                     f"All parties have signed. Your project '{project.title}' is now officially adopted!",
                     "/student?tab=personal"
+                )
+            # Gap 5 — Reveal student contact to NGO after full execution
+            if ngo and student:
+                create_notification(
+                    db, ngo.user_id, "adoption_contact_revealed",
+                    "📋 Agreement Executed — Student Contact Details",
+                    f"Your adoption of '{project.title}' is fully executed. "
+                    f"Contact your student: {student.display_name} — {student.user.email}",
+                    "/ngo?tab=adoptions"
                 )
     db.commit()
     return {"status": "signed", "fully_executed": agreement.student_signed_at is not None and agreement.ngo_signed_at is not None and agreement.admin_signed_at is not None}
