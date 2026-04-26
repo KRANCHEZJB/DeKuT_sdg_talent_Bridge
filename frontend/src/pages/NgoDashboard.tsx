@@ -13,6 +13,8 @@ import {
   submitStudentReview, reviewSubmission, getSubmission,
   ngoCloseProject, showToast,
   submitOutcome,
+  getShowcase, requestAdoption, getMyAdoptionRequests, signAgreement,
+  getMyReimbursements, ngoMarkPaid,
 } from '../api/api'
 
 interface Project {
@@ -61,6 +63,9 @@ const TABS = [
   { key: 'messages',      icon: '💬', label: 'Messages' },
   { key: 'disputes',      icon: '⚖️', label: 'Disputes' },
   { key: 'bootcamps',     icon: '🎓', label: 'Bootcamps' },
+  { key: 'reimbursements', icon: '💰', label: 'Reimbursements' },
+  { key: 'showcase',      icon: '🌟', label: 'Project Showcase' },
+  { key: 'adoptions',     icon: '🤝', label: 'My Adoptions' },
   { key: 'notifications', icon: '🔔', label: 'Notifications' },
   { key: 'profile',       icon: '🏢', label: 'Org Profile' },
 ]
@@ -82,6 +87,52 @@ const NgoDashboard = () => {
   const [reviewForm, setReviewForm] = useState({ overall_rating: 5, review_text: '' })
   const [reviewingAppId, setReviewingAppId] = useState<string | null>(null)
   const [outcomeAppId, setOutcomeAppId] = useState<string | null>(null)
+  const [ngoReimbursements, setNgoReimbursements] = useState<any[]>([])
+  const [payForm, setPayForm] = useState<{[id:string]:{ref:string,method:string}}>({})
+  const [markingPaid, setMarkingPaid] = useState<string|null>(null)
+  const handleMarkPaid = async (id: string) => {
+    const f = payForm[id] || {ref:'',method:''}
+    if (!f.ref.trim() || !f.method.trim()) { showToast('Enter payment reference and method','error'); return }
+    setMarkingPaid(id)
+    try {
+      await ngoMarkPaid(id, { payment_reference: f.ref, payment_method: f.method })
+      showToast('Marked as paid — awaiting student confirmation','success')
+      const r = await getMyReimbursements(); setNgoReimbursements(r.data || [])
+    } catch (err:any) { showToast(err.response?.data?.detail||'Error','error') }
+    finally { setMarkingPaid(null) }
+  }
+  const [showcase, setShowcase] = useState<any[]>([])
+  const [adoptionRequests, setAdoptionRequests] = useState<any[]>([])
+  const [adoptingProjectId, setAdoptingProjectId] = useState<string | null>(null)
+  const [adoptForm, setAdoptForm] = useState({ intended_use: '', deployment_scale: 'local', adoption_level: 1, compensation_offered: '' })
+  const [submittingAdopt, setSubmittingAdopt] = useState(false)
+  const handleRequestAdoption = async () => {
+    if (!adoptingProjectId) return
+    if (!adoptForm.intended_use.trim() || !adoptForm.compensation_offered.trim()) {
+      showToast('Please fill all required fields', 'error'); return
+    }
+    setSubmittingAdopt(true)
+    try {
+      await requestAdoption(adoptingProjectId, adoptForm)
+      showToast('Adoption request submitted!', 'success')
+      setAdoptingProjectId(null)
+      setAdoptForm({ intended_use: '', deployment_scale: 'local', adoption_level: 1, compensation_offered: '' })
+      const res = await getMyAdoptionRequests()
+      setAdoptionRequests(res.data)
+    } catch (err: any) {
+      showToast(err.response?.data?.detail || 'Could not submit request', 'error')
+    } finally { setSubmittingAdopt(false) }
+  }
+  const handleSignAgreement = async (agreementId: string) => {
+    try {
+      const res = await signAgreement(agreementId)
+      showToast(res.data.fully_executed ? '🎉 Agreement fully executed!' : '✅ Signed!', 'success')
+      const r = await getMyAdoptionRequests()
+      setAdoptionRequests(r.data)
+    } catch (err: any) {
+      showToast(err.response?.data?.detail || 'Could not sign', 'error')
+    }
+  }
   const [submittingOutcome, setSubmittingOutcome] = useState(false)
   const [outcomeForm, setOutcomeForm] = useState({
     completion_date: new Date().toISOString().split('T')[0],
@@ -112,6 +163,8 @@ const NgoDashboard = () => {
   const [submittingReview, setSubmittingReview] = useState(false)
   const [reviewingSubmission, setReviewingSubmission] = useState<{ appId: string; action: string } | null>(null)
   const [submissionDetails, setSubmissionDetails] = useState<{ description: string; deliverable_url?: string; hours_worked?: number } | null>(null)
+  const [viewingSubmissionAppId, setViewingSubmissionAppId] = useState<string | null>(null)
+  const [viewSubmissionDetails, setViewSubmissionDetails] = useState<{ description: string; deliverable_url?: string; hours_worked?: number } | null>(null)
   const [loadingSubmission, setLoadingSubmission] = useState(false)
   const [submissionFeedback, setSubmissionFeedback] = useState("")
   const [submittingSubmissionReview, setSubmittingSubmissionReview] = useState(false)
@@ -232,6 +285,7 @@ const NgoDashboard = () => {
       setSubmissionFeedback("")
       setSubmissionDetails(null)
       loadData()
+      if (selectedProject) loadApplications(selectedProject.id)
     } catch { showToast("Failed to update submission", "error") }
     finally { setSubmittingSubmissionReview(false) }
   }
@@ -727,7 +781,14 @@ const NgoDashboard = () => {
                   {app.status === 'work_submitted' && (
                     <div style={{ width: '100%', background: 'rgba(96,180,240,0.07)', border: '1px solid rgba(96,180,240,0.2)', borderRadius: '8px', padding: '10px 14px', marginBottom: '6px' }}>
                       <p style={{ color: '#60B4F0', fontSize: '12px', fontWeight: 700, marginBottom: '4px' }}>📋 Student Submitted Work</p>
-                      <p style={{ color: '#94A3B8', fontSize: '12px' }}>Review the submission and approve or request revisions.</p>
+                      <p style={{ color: '#94A3B8', fontSize: '12px', marginBottom: '8px' }}>Review the submission and approve or request revisions.</p>
+                      <button onClick={async () => {
+                        setViewingSubmissionAppId(app.application_id)
+                        setViewSubmissionDetails(null)
+                        try { const r = await getSubmission(app.application_id); setViewSubmissionDetails(r.data) } catch { setViewSubmissionDetails(null) }
+                      }} style={{ padding: '5px 12px', borderRadius: '6px', border: '1px solid rgba(96,180,240,0.3)', background: 'rgba(96,180,240,0.1)', color: '#60B4F0', cursor: 'pointer', fontFamily: 'Inter, sans-serif', fontSize: '12px', fontWeight: 700 }}>
+                        👁 View Submission
+                      </button>
                     </div>
                   )}
                   {app.status === 'work_submitted' && (
@@ -755,7 +816,7 @@ const NgoDashboard = () => {
                     <button onClick={() => setReviewingAppId(app.application_id)}
                       style={{ padding: '7px 14px', borderRadius: '8px', border: '1px solid rgba(253,185,19,0.3)', background: 'rgba(253,185,19,0.15)', color: '#FDB913', cursor: 'pointer', fontFamily: 'Inter, sans-serif', fontSize: '12px', fontWeight: 700 }}>⭐ Write Review</button>
                   )}
-                  {['shortlisted','selected','rejected'].map(s => (
+                  {!['work_submitted','pending_certificate','officially_complete','completed'].includes(app.status) && ['shortlisted','selected','rejected'].map(s => (
                     <button key={s} onClick={() => handleUpdateApplication(app.application_id, s)}
                       style={{ padding: '7px 14px', borderRadius: '8px', border: `1px solid ${s==='selected'?'rgba(0,166,81,0.3)':s==='rejected'?'rgba(229,62,62,0.3)':'rgba(253,185,19,0.3)'}`, background: s==='selected'?'rgba(0,166,81,0.15)':s==='rejected'?'rgba(229,62,62,0.15)':'rgba(253,185,19,0.15)', color: s==='selected'?'#4ADE80':s==='rejected'?'#FC8181':'#FDB913', cursor: 'pointer', fontFamily: 'Inter, sans-serif', fontSize: '12px', fontWeight: 700 }}>
                       {s==='selected'?'✓ Select':s==='rejected'?'✗ Reject':'⭐ Shortlist'}
@@ -769,6 +830,298 @@ const NgoDashboard = () => {
       )}
     </div>
   )
+
+
+
+  const renderReimbursements = () => {
+    const reimStatusColor = (s: string) => ({ pending: '#FDB913', paid_pending_confirmation: '#60B4F0', settled: '#4ADE80' }[s] || '#94A3B8')
+    return (
+      <div>
+        <div style={{ marginBottom: '24px' }}>
+          <h1 style={{ fontSize: '24px', fontWeight: 800, marginBottom: '4px' }}>Reimbursements</h1>
+          <p style={{ color: '#94A3B8', fontSize: '14px' }}>Pay students for verified project expenses</p>
+        </div>
+        {ngoReimbursements.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '60px 20px', color: '#94A3B8' }}>
+            <div style={{ fontSize: '48px', marginBottom: '16px' }}>💰</div>
+            <p style={{ fontSize: '16px', fontWeight: 600, color: '#F1F5F9', marginBottom: '8px' }}>No reimbursement obligations</p>
+            <p>Admin creates obligations once student receipts are verified</p>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            {ngoReimbursements.map((o: any) => (
+              <div key={o.id} style={{ background: '#132038', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '14px', padding: '20px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px', marginBottom: '10px' }}>
+                  <div>
+                    <p style={{ color: '#F1F5F9', fontWeight: 700, fontSize: '15px', margin: '0 0 3px' }}>{o.project_name}</p>
+                    <p style={{ color: '#94A3B8', fontSize: '12px', margin: 0 }}>to {o.student_name} · due {o.due_date}</p>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <p style={{ color: '#F1F5F9', fontWeight: 700, fontSize: '16px', margin: '0 0 4px' }}>{o.currency} {Number(o.total_verified_amount).toLocaleString()}</p>
+                    <span style={{ padding: '2px 10px', borderRadius: '999px', fontSize: '11px', fontWeight: 700, background: `${reimStatusColor(o.status)}22`, border: `1px solid ${reimStatusColor(o.status)}44`, color: reimStatusColor(o.status) }}>
+                      {o.status === 'paid_pending_confirmation' ? '⏳ Awaiting Confirmation' : o.status === 'settled' ? '✅ Settled' : '⏳ Pending'}
+                    </span>
+                  </div>
+                </div>
+                {o.status === 'pending' && (
+                  <div style={{ marginTop: '10px', padding: '14px', background: 'rgba(255,255,255,0.03)', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.06)' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
+                      <div>
+                        <label style={{ color: '#94A3B8', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: '5px' }}>Payment Reference</label>
+                        <input value={payForm[o.id]?.ref||''} onChange={e => setPayForm(p => ({...p,[o.id]:{...p[o.id],ref:e.target.value,method:p[o.id]?.method||''}}))} placeholder="e.g. MPESA-XXXXX"
+                          style={{ width:'100%', background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)', borderRadius:'8px', padding:'8px 12px', color:'#F1F5F9', fontSize:'13px', outline:'none', boxSizing:'border-box' }} />
+                      </div>
+                      <div>
+                        <label style={{ color: '#94A3B8', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: '5px' }}>Payment Method</label>
+                        <select value={payForm[o.id]?.method||''} onChange={e => setPayForm(p => ({...p,[o.id]:{...p[o.id],method:e.target.value,ref:p[o.id]?.ref||''}}))}
+                          style={{ width:'100%', background:'#1E293B', border:'1px solid rgba(255,255,255,0.1)', borderRadius:'8px', padding:'8px 12px', color:'#F1F5F9', fontSize:'13px', outline:'none' }}>
+                          <option value="">Select...</option>
+                          <option>M-PESA</option><option>Bank Transfer</option><option>Cash</option><option>Cheque</option>
+                        </select>
+                      </div>
+                    </div>
+                    <button onClick={() => handleMarkPaid(o.id)} disabled={markingPaid===o.id}
+                      style={{ padding:'8px 18px', borderRadius:'8px', border:'none', background:'#00A651', color:'#fff', cursor:'pointer', fontFamily:'Inter, sans-serif', fontSize:'13px', fontWeight:700, opacity:markingPaid===o.id?0.6:1 }}>
+                      {markingPaid===o.id ? '⏳ Submitting...' : '💸 Mark as Paid'}
+                    </button>
+                  </div>
+                )}
+                {o.status === 'paid_pending_confirmation' && (
+                  <p style={{ color:'#60B4F0', fontSize:'13px', marginTop:'8px' }}>✅ Payment submitted · ref: {o.payment_reference} · awaiting student confirmation</p>
+                )}
+                {o.status === 'settled' && (
+                  <p style={{ color:'#4ADE80', fontSize:'13px', marginTop:'8px' }}>🎉 Settled {o.settled_at?.slice(0,10)}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  const renderShowcase = () => (
+    <div>
+      <div style={{ marginBottom: '24px' }}>
+        <h1 style={{ fontSize: '24px', fontWeight: 800, marginBottom: '4px' }}>Project Showcase</h1>
+        <p style={{ color: '#94A3B8', fontSize: '14px' }}>Browse student innovations available for adoption</p>
+      </div>
+      {showcase.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '60px 20px', color: '#94A3B8' }}>
+          <div style={{ fontSize: '48px', marginBottom: '16px' }}>🌟</div>
+          <p style={{ fontSize: '16px', fontWeight: 600, color: '#F1F5F9', marginBottom: '8px' }}>No projects in showcase yet</p>
+          <p>Check back later — students submit innovations for showcase approval</p>
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px,1fr))', gap: '16px' }}>
+          {showcase.map((proj: any) => (
+            <div key={proj.id} style={{ background: '#132038', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '14px', padding: '20px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <h3 style={{ fontSize: '15px', fontWeight: 700, color: '#F1F5F9', margin: 0 }}>{proj.title}</h3>
+                <span style={{ padding: '3px 10px', borderRadius: '999px', fontSize: '11px', fontWeight: 700, background: 'rgba(0,166,81,0.15)', border: '1px solid rgba(0,166,81,0.25)', color: '#4ADE80' }}>Showcase</span>
+              </div>
+              <p style={{ fontSize: '13px', color: '#94A3B8', margin: 0, lineHeight: 1.5 }}>{proj.description}</p>
+              {proj.tech_stack && <p style={{ fontSize: '12px', color: '#60B4F0', margin: 0 }}>🛠 {proj.tech_stack}</p>}
+              {proj.github_url && <a href={proj.github_url} target="_blank" rel="noreferrer" style={{ fontSize: '12px', color: '#A78BFA', textDecoration: 'none' }}>🔗 View Repository</a>}
+              <button onClick={() => setAdoptingProjectId(proj.id)}
+                style={{ marginTop: '6px', padding: '10px', borderRadius: '8px', border: 'none', background: '#0A6EBD', color: '#fff', cursor: 'pointer', fontFamily: 'Inter, sans-serif', fontSize: '13px', fontWeight: 700 }}>
+                🤝 Request Adoption
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+
+  const renderAdoptions = () => (
+    <div>
+      <div style={{ marginBottom: '24px' }}>
+        <h1 style={{ fontSize: '24px', fontWeight: 800, marginBottom: '4px' }}>My Adoptions</h1>
+        <p style={{ color: '#94A3B8', fontSize: '14px' }}>Track your adoption requests and agreements</p>
+      </div>
+      {adoptionRequests.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '60px 20px', color: '#94A3B8' }}>
+          <div style={{ fontSize: '48px', marginBottom: '16px' }}>🤝</div>
+          <p style={{ fontSize: '16px', fontWeight: 600, color: '#F1F5F9', marginBottom: '8px' }}>No adoption requests yet</p>
+          <p>Browse the showcase tab to find projects to adopt</p>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          {adoptionRequests.map((req: any) => (
+            <div key={req.id} style={{ background: '#132038', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '14px', padding: '20px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px', flexWrap: 'wrap', gap: '8px' }}>
+                <h3 style={{ fontSize: '15px', fontWeight: 700, color: '#F1F5F9', margin: 0 }}>{req.project_title}</h3>
+                <span style={{ padding: '3px 10px', borderRadius: '999px', fontSize: '11px', fontWeight: 700,
+                  background: req.status === 'fully_executed' ? 'rgba(74,222,128,0.1)' : req.status === 'approved' ? 'rgba(96,180,240,0.1)' : 'rgba(253,185,19,0.1)',
+                  border: `1px solid ${req.status === 'fully_executed' ? 'rgba(74,222,128,0.2)' : req.status === 'approved' ? 'rgba(96,180,240,0.2)' : 'rgba(253,185,19,0.2)'}`,
+                  color: req.status === 'fully_executed' ? '#4ADE80' : req.status === 'approved' ? '#60B4F0' : '#FDB913' }}>
+                  {req.status === 'fully_executed' ? '✅ Executed' : req.status === 'approved' ? '📋 Agreement Ready' : '⏳ Pending'}
+                </span>
+              </div>
+              <p style={{ fontSize: '13px', color: '#94A3B8', marginBottom: '6px' }}>Level {req.adoption_level} · {req.deployment_scale} · {req.compensation_offered}</p>
+              {req.agreement_id && (
+                <div style={{ marginTop: '12px', padding: '12px', background: 'rgba(255,255,255,0.03)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.06)' }}>
+                  <p style={{ fontSize: '12px', fontWeight: 700, color: '#F1F5F9', marginBottom: '8px' }}>Agreement {req.agreement_reference}</p>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' }}>
+                    {[['Student', req.student_signed], ['NGO (You)', req.ngo_signed], ['Admin', req.admin_signed]].map(([label, signed]) => (
+                      <span key={label as string} style={{ padding: '2px 8px', borderRadius: '999px', fontSize: '11px', fontWeight: 600,
+                        background: signed ? 'rgba(74,222,128,0.1)' : 'rgba(148,163,184,0.1)',
+                        border: `1px solid ${signed ? 'rgba(74,222,128,0.2)' : 'rgba(148,163,184,0.1)'}`,
+                        color: signed ? '#4ADE80' : '#94A3B8' }}>
+                        {signed ? '✅' : '⏳'} {label as string}
+                      </span>
+                    ))}
+                  </div>
+                  {!req.ngo_signed && (
+                    <button onClick={() => handleSignAgreement(req.agreement_id)}
+                      style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', background: '#00A651', color: '#fff', cursor: 'pointer', fontFamily: 'Inter, sans-serif', fontSize: '13px', fontWeight: 700 }}>
+                      ✍️ Sign Agreement
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+
+
+  const renderViewSubmissionModal = () => viewingSubmissionAppId ? (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+      <div style={{ background: '#1E293B', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '16px', padding: '28px', width: '500px', maxWidth: '100%' }}>
+        <h3 style={{ color: '#F1F5F9', fontWeight: 700, marginBottom: '16px' }}>📋 Student Submission</h3>
+        {viewSubmissionDetails === null ? (
+          <p style={{ color: '#94A3B8', fontSize: '13px' }}>⏳ Loading...</p>
+        ) : (
+          <>
+            <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: '10px', padding: '16px', marginBottom: '12px' }}>
+              <p style={{ color: '#94A3B8', fontSize: '11px', fontWeight: 700, marginBottom: '6px' }}>DESCRIPTION</p>
+              <p style={{ color: '#F1F5F9', fontSize: '14px', lineHeight: 1.6 }}>{viewSubmissionDetails.description}</p>
+            </div>
+            {viewSubmissionDetails.deliverable_url && (
+              <div style={{ background: 'rgba(96,180,240,0.07)', borderRadius: '10px', padding: '14px', marginBottom: '12px' }}>
+                <p style={{ color: '#94A3B8', fontSize: '11px', fontWeight: 700, marginBottom: '6px' }}>DELIVERABLE LINK</p>
+                <a href={viewSubmissionDetails.deliverable_url} target="_blank" rel="noreferrer"
+                  style={{ color: '#60B4F0', fontSize: '13px', wordBreak: 'break-all' }}>
+                  🔗 {viewSubmissionDetails.deliverable_url}
+                </a>
+              </div>
+            )}
+            {viewSubmissionDetails.hours_worked && (
+              <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: '10px', padding: '14px', marginBottom: '16px' }}>
+                <p style={{ color: '#94A3B8', fontSize: '11px', fontWeight: 700, marginBottom: '4px' }}>HOURS WORKED</p>
+                <p style={{ color: '#F1F5F9', fontSize: '14px' }}>⏱ {viewSubmissionDetails.hours_worked} hours</p>
+              </div>
+            )}
+          </>
+        )}
+        <button onClick={() => setViewingSubmissionAppId(null)}
+          style={{ width: '100%', padding: '10px', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: '#F1F5F9', fontWeight: 600, cursor: 'pointer', fontSize: '14px' }}>
+          Close
+        </button>
+      </div>
+    </div>
+  ) : null
+
+  const renderOutcomeModal = () => outcomeAppId ? (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, overflowY: 'auto', padding: '20px' }}>
+      <div style={{ background: '#1E293B', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '16px', padding: '28px', width: '520px', maxWidth: '100%' }}>
+        <h3 style={{ color: '#F1F5F9', fontWeight: 700, marginBottom: '16px' }}>📋 Submit Outcome Report</h3>
+        {[
+          { label: 'Completion Date', key: 'completion_date', type: 'date' },
+          { label: 'Deliverables Received *', key: 'deliverables_received', type: 'textarea' },
+          { label: 'SDG Impact Achieved *', key: 'sdg_impact_achieved', type: 'textarea' },
+          { label: 'Outcome Summary *', key: 'outcome_summary', type: 'textarea' },
+          { label: 'Written Review *', key: 'written_review', type: 'textarea' },
+          { label: 'Evidence URLs (comma separated)', key: 'evidence_urls', type: 'text' },
+        ].map(({ label, key, type }) => (
+          <div key={key} style={{ marginBottom: '14px' }}>
+            <label style={{ color: '#94A3B8', fontSize: '12px' }}>{label.toUpperCase()}</label>
+            {type === 'textarea' ? (
+              <textarea rows={3} value={(outcomeForm as any)[key]}
+                onChange={e => setOutcomeForm(p => ({ ...p, [key]: e.target.value }))}
+                style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', padding: '8px 12px', color: '#F1F5F9', fontSize: '14px', outline: 'none', resize: 'vertical', marginTop: '6px', boxSizing: 'border-box', fontFamily: 'Inter, sans-serif' }} />
+            ) : (
+              <input type={type} value={(outcomeForm as any)[key]}
+                onChange={e => setOutcomeForm(p => ({ ...p, [key]: e.target.value }))}
+                style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', padding: '8px 12px', color: '#F1F5F9', fontSize: '14px', outline: 'none', marginTop: '6px', boxSizing: 'border-box' }} />
+            )}
+          </div>
+        ))}
+        {[
+          { label: 'Quality Rating (1-5)', key: 'quality_rating' },
+          { label: 'Communication Rating (1-5)', key: 'communication_rating' },
+          { label: 'Reliability Rating (1-5)', key: 'reliability_rating' },
+        ].map(({ label, key }) => (
+          <div key={key} style={{ marginBottom: '14px' }}>
+            <label style={{ color: '#94A3B8', fontSize: '12px' }}>{label.toUpperCase()}</label>
+            <input type="number" min={1} max={5} value={(outcomeForm as any)[key]}
+              onChange={e => setOutcomeForm(p => ({ ...p, [key]: Number(e.target.value) }))}
+              style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', padding: '8px 12px', color: '#F1F5F9', fontSize: '14px', outline: 'none', marginTop: '6px', boxSizing: 'border-box' }} />
+          </div>
+        ))}
+        <div style={{ display: 'flex', gap: '10px', marginTop: '8px' }}>
+          <button onClick={handleSubmitOutcome} disabled={submittingOutcome}
+            style={{ flex: 1, padding: '10px', background: 'linear-gradient(135deg,#0A6EBD,#00A651)', border: 'none', borderRadius: '8px', color: '#fff', fontWeight: 700, cursor: 'pointer', fontSize: '14px' }}>
+            {submittingOutcome ? '⏳ Submitting...' : '✅ Submit Outcome'}
+          </button>
+          <button onClick={() => setOutcomeAppId(null)}
+            style={{ padding: '10px 16px', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: '#F1F5F9', fontWeight: 600, cursor: 'pointer', fontSize: '14px' }}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null
+
+  const renderAdoptionModal = () => adoptingProjectId ? (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+      <div style={{ background: '#1E293B', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '16px', padding: '28px', width: '460px', maxWidth: '100%' }}>
+        <h3 style={{ color: '#F1F5F9', fontWeight: 700, marginBottom: '16px' }}>🤝 Request Adoption</h3>
+        <div style={{ marginBottom: '14px' }}>
+          <label style={{ color: '#94A3B8', fontSize: '12px' }}>INTENDED USE *</label>
+          <textarea rows={3} value={adoptForm.intended_use}
+            onChange={e => setAdoptForm(p => ({ ...p, intended_use: e.target.value }))}
+            placeholder="How do you plan to use this project?"
+            style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', padding: '8px 12px', color: '#F1F5F9', fontSize: '14px', outline: 'none', resize: 'vertical', marginTop: '6px', boxSizing: 'border-box', fontFamily: 'Inter, sans-serif' }} />
+        </div>
+        <div style={{ marginBottom: '14px' }}>
+          <label style={{ color: '#94A3B8', fontSize: '12px' }}>COMPENSATION OFFERED *</label>
+          <input type="text" value={adoptForm.compensation_offered}
+            onChange={e => setAdoptForm(p => ({ ...p, compensation_offered: e.target.value }))}
+            placeholder="e.g. KES 50,000 or Equity 5%"
+            style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', padding: '8px 12px', color: '#F1F5F9', fontSize: '14px', outline: 'none', marginTop: '6px', boxSizing: 'border-box' }} />
+        </div>
+        <div style={{ marginBottom: '14px' }}>
+          <label style={{ color: '#94A3B8', fontSize: '12px' }}>DEPLOYMENT SCALE</label>
+          <select value={adoptForm.deployment_scale}
+            onChange={e => setAdoptForm(p => ({ ...p, deployment_scale: e.target.value }))}
+            style={{ width: '100%', background: '#1E293B', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', padding: '8px 12px', color: '#F1F5F9', fontSize: '14px', outline: 'none', marginTop: '6px' }}>
+            {['local','county','national','regional','global'].map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase()+s.slice(1)}</option>)}
+          </select>
+        </div>
+        <div style={{ marginBottom: '18px' }}>
+          <label style={{ color: '#94A3B8', fontSize: '12px' }}>ADOPTION LEVEL (1-5)</label>
+          <input type="number" min={1} max={5} value={adoptForm.adoption_level}
+            onChange={e => setAdoptForm(p => ({ ...p, adoption_level: Number(e.target.value) }))}
+            style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', padding: '8px 12px', color: '#F1F5F9', fontSize: '14px', outline: 'none', marginTop: '6px', boxSizing: 'border-box' }} />
+        </div>
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button onClick={handleRequestAdoption}
+            style={{ flex: 1, padding: '10px', background: 'linear-gradient(135deg,#0A6EBD,#00A651)', border: 'none', borderRadius: '8px', color: '#fff', fontWeight: 700, cursor: 'pointer', fontSize: '14px' }}>
+            🤝 Submit Request
+          </button>
+          <button onClick={() => setAdoptingProjectId(null)}
+            style={{ padding: '10px 16px', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: '#F1F5F9', fontWeight: 600, cursor: 'pointer', fontSize: '14px' }}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null
 
   const renderReviewModal = () => reviewingAppId ? (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
@@ -1192,7 +1545,9 @@ const [bootcamps, setBootcamps] = useState<any[]>([])
   )
   const TAB_RENDER: Record<string, () => React.ReactElement> = {
     overview: renderOverview, projects: renderProjects, create: renderCreate,
-    applications: renderApplications, messages: renderMessages, disputes: renderDisputes, bootcamps: renderBootcamps, notifications: renderNotifications, profile: renderProfile,
+    applications: renderApplications, messages: renderMessages, disputes: renderDisputes, bootcamps: renderBootcamps,
+    reimbursements: renderReimbursements, showcase: renderShowcase, adoptions: renderAdoptions,
+    notifications: renderNotifications, profile: renderProfile,
   }
 
   return (
@@ -1282,6 +1637,8 @@ const [bootcamps, setBootcamps] = useState<any[]>([])
           )}
         </main>
       {renderReviewModal()}
+      {renderAdoptionModal()}
+      {renderViewSubmissionModal()}
       {renderOutcomeModal()}
       {reviewingSubmission && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>

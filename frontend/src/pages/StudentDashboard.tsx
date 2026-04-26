@@ -1,3 +1,4 @@
+import { submitReceipt, getMyReceipts, getMyReimbursements, studentConfirmPayment, showToast as apiShowToast, getMyScores } from '../api/api'
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
@@ -9,7 +10,7 @@ import {
   getNotifications, markNotificationRead, markAllNotificationsRead,
 showToast as apiToast,
   getMyThreads, getThread, sendMessage, closeThread, createThread,
-  raiseDispute, getMyDisputes, submitNgoReview, submitWork,
+  raiseDispute, getMyDisputes, submitNgoReview, submitWork, getSubmission, downloadCertificatePdf, downloadLetterPdf,
   withdrawApplication, getAwards, submitReflection
 } from '../api/api'
 
@@ -54,6 +55,7 @@ const TABS = [
   { key: 'messages',       icon: '💬', label: 'Messages' },
   { key: 'disputes',       icon: '⚖️', label: 'Disputes' },
   { key: 'notifications',  icon: '🔔', label: 'Notifications' },
+  { key: 'scores',         icon: '⭐', label: 'My Scores' },
   { key: 'profile',        icon: '👤', label: 'My Profile' },
 ]
 
@@ -102,6 +104,7 @@ const StudentDashboard = () => {
   const [letterRequests, setLetterRequests] = useState<LetterRequest[]>([])
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [loading, setLoading] = useState(true)
+  const [myScores, setMyScores] = useState<any[]>([])
   const [applying, setApplying] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [filterType, setFilterType] = useState<'all'|'individual'|'team'>('all')
@@ -127,14 +130,33 @@ const StudentDashboard = () => {
 
   const showToast = (msg: string, type: 'success'|'error' = 'success') => apiToast(msg, type)
 
+  const handleDownloadPdf = async (fetchFn: () => Promise<any>, filename: string) => {
+    try {
+      const response = await fetchFn()
+      const blob = new Blob([response.data], { type: 'application/pdf' })
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      window.URL.revokeObjectURL(url)
+      document.body.removeChild(a)
+    } catch {
+      showToast('Failed to download PDF', 'error')
+    }
+  }
+
+
+
   useEffect(() => { loadData() }, [])
 
   const loadData = async () => {
     setLoading(true)
     try {
-      const [projRes, appRes, profileRes, ppRes, certRes, letterRes, notifRes] = await Promise.allSettled([
+      const [projRes, appRes, profileRes, ppRes, certRes, letterRes, notifRes, awardsRes, scoresRes] = await Promise.allSettled([
         getProjects(), getMyApplications(), getStudentProfile(),
-        getMyPersonalProjects(), getMyCertificates(), getMyLetterRequests(), getNotifications(), getAwards()
+        getMyPersonalProjects(), getMyCertificates(), getMyLetterRequests(), getNotifications(), getAwards(), getMyScores()
       ])
       if (projRes.status === 'fulfilled') setProjects(projRes.value.data)
       if (appRes.status === 'fulfilled') setApplications(appRes.value.data)
@@ -154,6 +176,8 @@ const StudentDashboard = () => {
       if (certRes.status === 'fulfilled') setCertificates(certRes.value.data)
       if (letterRes.status === 'fulfilled') setLetterRequests(letterRes.value.data)
       if (notifRes.status === 'fulfilled') setNotifications(notifRes.value.data?.notifications || [])
+      if (awardsRes.status === 'fulfilled') setAwards(awardsRes.value.data || [])
+      if (scoresRes.status === 'fulfilled') setMyScores(scoresRes.value.data || [])
     } finally { setLoading(false) }
   }
 
@@ -477,9 +501,24 @@ const StudentDashboard = () => {
                     </button>
                   )}
                   {app.status === 'work_submitted' && (
-                    <span style={{ background: 'rgba(96,180,240,0.1)', border: '1px solid rgba(96,180,240,0.2)', color: '#60B4F0', padding: '6px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 600 }}>
-                      ⏳ Awaiting NGO Review
-                    </span>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <span style={{ background: 'rgba(96,180,240,0.1)', border: '1px solid rgba(96,180,240,0.2)', color: '#60B4F0', padding: '6px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 600 }}>
+                        ⏳ Awaiting NGO Review
+                      </span>
+                      <button onClick={async () => {
+                        try {
+                          const r = await getSubmission(app.application_id)
+                          const s = r.data
+                          setSubmitWorkAppId(app.application_id)
+                          setSubmitWorkForm({ description: s.description || '', deliverable_url: s.deliverable_url || '', hours_worked: s.hours_worked || '' })
+                        } catch {
+                          setSubmitWorkAppId(app.application_id)
+                          setSubmitWorkForm({ description: '', deliverable_url: '', hours_worked: '' })
+                        }
+                      }} style={{ background: 'rgba(253,185,19,0.1)', border: '1px solid rgba(253,185,19,0.2)', color: '#FDB913', padding: '6px 12px', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: 600, fontFamily: 'Inter, sans-serif' }}>
+                        ✏️ Update Submission
+                      </button>
+                    </div>
                   )}
                   {app.status === 'pending_certificate' && (
                     <span style={{ background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.2)', color: '#A78BFA', padding: '6px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 600 }}>
@@ -633,7 +672,11 @@ const StudentDashboard = () => {
               <div style={{ fontSize: '48px', marginBottom: '12px' }}>🏆</div>
               <h3 style={{ fontSize: '16px', fontWeight: 700, marginBottom: '6px', color: '#FDB913' }}>{cert.title}</h3>
               {cert.project_name && <p style={{ fontSize: '13px', color: '#94A3B8', marginBottom: '8px' }}>{cert.project_name}</p>}
-              <p style={{ fontSize: '12px', color: '#64748B' }}>Issued: {new Date(cert.issued_at).toLocaleDateString()}</p>
+              <p style={{ fontSize: '12px', color: '#64748B', marginBottom: '12px' }}>Issued: {new Date(cert.issued_at).toLocaleDateString()}</p>
+              <button onClick={() => handleDownloadPdf(() => downloadCertificatePdf(cert.id), `certificate-${cert.reference_number || cert.id}.pdf`)}
+                style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', background: 'rgba(253,185,19,0.15)', color: '#FDB913', cursor: 'pointer', fontFamily: 'Inter, sans-serif', fontSize: '12px', fontWeight: 700, outline: '1px solid rgba(253,185,19,0.3)' }}>
+                📄 Download PDF
+              </button>
             </div>
           ))}
         </div>
@@ -731,13 +774,146 @@ const StudentDashboard = () => {
                 <p style={{ fontWeight: 600, fontSize: '14px', marginBottom: '3px' }}>{req.purpose}</p>
                 <p style={{ fontSize: '12px', color: '#64748B' }}>Requested: {new Date(req.created_at).toLocaleDateString()}</p>
               </div>
-              <span style={{ background: statusBg(req.status), border: `1px solid ${statusColor(req.status)}40`, color: statusColor(req.status), padding: '5px 12px', borderRadius: '999px', fontSize: '12px', fontWeight: 600, textTransform: 'capitalize' }}>{req.status}</span>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <span style={{ background: statusBg(req.status), border: `1px solid ${statusColor(req.status)}40`, color: statusColor(req.status), padding: '5px 12px', borderRadius: '999px', fontSize: '12px', fontWeight: 600, textTransform: 'capitalize' }}>{req.status}</span>
+                {req.status === 'approved' && (
+                  <button onClick={() => handleDownloadPdf(() => downloadLetterPdf(req.id), `letter-${req.id}.pdf`)}
+                    style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid rgba(96,180,240,0.3)', background: 'rgba(96,180,240,0.1)', color: '#60B4F0', cursor: 'pointer', fontFamily: 'Inter, sans-serif', fontSize: '12px', fontWeight: 700 }}>
+                    📄 Download
+                  </button>
+                )}
+              </div>
             </div>
           ))}
         </div>
       )}
     </div>
   )
+
+
+  const renderReceipts = () => {
+    const completedApps = applications.filter((a: any) => ['selected','completed','officially_completed'].includes(a.status))
+    const statusColor = (s: string) => ({ pending: '#FDB913', verified: '#4ADE80', disputed: '#FC8181' }[s] || '#94A3B8')
+    const reimStatusColor = (s: string) => ({ pending: '#FDB913', paid_pending_confirmation: '#60B4F0', settled: '#4ADE80' }[s] || '#94A3B8')
+    return (
+      <div>
+        <div style={{ marginBottom: '24px' }}>
+          <h1 style={{ fontSize: '24px', fontWeight: 800, marginBottom: '4px' }}>Receipts & Reimbursements</h1>
+          <p style={{ color: '#94A3B8', fontSize: '14px' }}>Submit expense receipts and track reimbursements from NGOs</p>
+        </div>
+        {/* Submit Receipt */}
+        <div style={{ background: '#132038', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '14px', padding: '20px', marginBottom: '24px' }}>
+          <h3 style={{ fontSize: '15px', fontWeight: 700, color: '#F1F5F9', marginBottom: '16px' }}>🧾 Submit New Receipt</h3>
+          {completedApps.length === 0 ? (
+            <p style={{ color: '#94A3B8', fontSize: '13px' }}>You have no active or completed projects to submit receipts for.</p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div>
+                <label style={{ color: '#94A3B8', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: '6px' }}>Project *</label>
+                <select value={receiptForm.application_id} onChange={e => setReceiptForm(p => ({...p, application_id: e.target.value}))}
+                  style={{ width: '100%', background: '#1E293B', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', padding: '8px 12px', color: '#F1F5F9', fontSize: '13px', outline: 'none' }}>
+                  <option value="">Select project...</option>
+                  {completedApps.map((a: any) => <option key={a.application_id} value={a.application_id}>{a.project_name || a.application_id}</option>)}
+                </select>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label style={{ color: '#94A3B8', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: '6px' }}>Amount *</label>
+                  <input type="number" value={receiptForm.amount} onChange={e => setReceiptForm(p => ({...p, amount: e.target.value}))} placeholder="0.00"
+                    style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', padding: '8px 12px', color: '#F1F5F9', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+                </div>
+                <div>
+                  <label style={{ color: '#94A3B8', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: '6px' }}>Currency</label>
+                  <select value={receiptForm.currency} onChange={e => setReceiptForm(p => ({...p, currency: e.target.value}))}
+                    style={{ width: '100%', background: '#1E293B', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', padding: '8px 12px', color: '#F1F5F9', fontSize: '13px', outline: 'none' }}>
+                    <option>KES</option><option>USD</option><option>EUR</option>
+                  </select>
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label style={{ color: '#94A3B8', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: '6px' }}>Supplier Name *</label>
+                  <input value={receiptForm.supplier_name} onChange={e => setReceiptForm(p => ({...p, supplier_name: e.target.value}))} placeholder="Supplier / Vendor"
+                    style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', padding: '8px 12px', color: '#F1F5F9', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+                </div>
+                <div>
+                  <label style={{ color: '#94A3B8', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: '6px' }}>Receipt Date *</label>
+                  <input type="date" value={receiptForm.receipt_date} onChange={e => setReceiptForm(p => ({...p, receipt_date: e.target.value}))}
+                    style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', padding: '8px 12px', color: '#F1F5F9', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+                </div>
+              </div>
+              <div>
+                <label style={{ color: '#94A3B8', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: '6px' }}>Purpose *</label>
+                <input value={receiptForm.purpose} onChange={e => setReceiptForm(p => ({...p, purpose: e.target.value}))} placeholder="What was this expense for?"
+                  style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', padding: '8px 12px', color: '#F1F5F9', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+              </div>
+              <div>
+                <label style={{ color: '#94A3B8', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: '6px' }}>Receipt Image URL *</label>
+                <input value={receiptForm.receipt_image_url} onChange={e => setReceiptForm(p => ({...p, receipt_image_url: e.target.value}))} placeholder="https://..."
+                  style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', padding: '8px 12px', color: '#F1F5F9', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+              </div>
+              <button onClick={handleSubmitReceipt} disabled={submittingReceipt}
+                style={{ padding: '10px 20px', borderRadius: '8px', border: 'none', background: '#0A6EBD', color: '#fff', cursor: 'pointer', fontFamily: 'Inter, sans-serif', fontSize: '13px', fontWeight: 700, alignSelf: 'flex-start', opacity: submittingReceipt ? 0.6 : 1 }}>
+                {submittingReceipt ? '⏳ Submitting...' : '📤 Submit Receipt'}
+              </button>
+            </div>
+          )}
+        </div>
+        {/* My Receipts */}
+        <h3 style={{ fontSize: '15px', fontWeight: 700, color: '#F1F5F9', marginBottom: '12px' }}>My Receipts</h3>
+        {myReceipts.length === 0 ? <p style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '24px' }}>No receipts submitted yet.</p> : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '24px' }}>
+            {myReceipts.map((r: any) => (
+              <div key={r.id} style={{ background: '#132038', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '8px' }}>
+                <div>
+                  <p style={{ color: '#F1F5F9', fontWeight: 600, fontSize: '14px', margin: '0 0 4px' }}>{r.purpose}</p>
+                  <p style={{ color: '#94A3B8', fontSize: '12px', margin: '0 0 2px' }}>{r.supplier_name} · {r.receipt_date} · {r.project_name}</p>
+                  {r.dispute_reason && <p style={{ color: '#FC8181', fontSize: '12px', margin: '4px 0 0' }}>⚠️ {r.dispute_reason}</p>}
+                  {r.receipt_image_url && <a href={r.receipt_image_url} target="_blank" rel="noreferrer" style={{ fontSize: '12px', color: '#A78BFA' }}>🔗 View Receipt</a>}
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <p style={{ color: '#F1F5F9', fontWeight: 700, fontSize: '15px', margin: '0 0 4px' }}>{r.currency} {Number(r.amount).toLocaleString()}</p>
+                  <span style={{ padding: '2px 10px', borderRadius: '999px', fontSize: '11px', fontWeight: 700, background: `${statusColor(r.status)}22`, border: `1px solid ${statusColor(r.status)}44`, color: statusColor(r.status) }}>{r.status}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {/* Reimbursements */}
+        <h3 style={{ fontSize: '15px', fontWeight: 700, color: '#F1F5F9', marginBottom: '12px' }}>Reimbursements</h3>
+        {myReimbursements.length === 0 ? <p style={{ color: '#94A3B8', fontSize: '13px' }}>No reimbursements scheduled yet.</p> : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {myReimbursements.map((o: any) => (
+              <div key={o.id} style={{ background: '#132038', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', padding: '16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px', marginBottom: '8px' }}>
+                  <div>
+                    <p style={{ color: '#F1F5F9', fontWeight: 600, fontSize: '14px', margin: '0 0 2px' }}>{o.project_name}</p>
+                    <p style={{ color: '#94A3B8', fontSize: '12px', margin: 0 }}>from {o.ngo_name} · due {o.due_date}</p>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <p style={{ color: '#F1F5F9', fontWeight: 700, fontSize: '15px', margin: '0 0 4px' }}>{o.currency} {Number(o.total_verified_amount).toLocaleString()}</p>
+                    <span style={{ padding: '2px 10px', borderRadius: '999px', fontSize: '11px', fontWeight: 700, background: `${reimStatusColor(o.status)}22`, border: `1px solid ${reimStatusColor(o.status)}44`, color: reimStatusColor(o.status) }}>
+                      {o.status === 'paid_pending_confirmation' ? 'Awaiting Your Confirmation' : o.status}
+                    </span>
+                  </div>
+                </div>
+                {o.status === 'paid_pending_confirmation' && (
+                  <div style={{ marginTop: '8px', padding: '10px', background: 'rgba(96,180,240,0.05)', borderRadius: '8px', border: '1px solid rgba(96,180,240,0.15)' }}>
+                    <p style={{ color: '#CBD5E1', fontSize: '12px', margin: '0 0 8px' }}>Payment ref: <strong>{o.payment_reference}</strong> via {o.payment_method}</p>
+                    <button onClick={() => handleConfirmPayment(o.id)} disabled={confirmingId === o.id}
+                      style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', background: '#00A651', color: '#fff', cursor: 'pointer', fontFamily: 'Inter, sans-serif', fontSize: '12px', fontWeight: 700, opacity: confirmingId === o.id ? 0.6 : 1 }}>
+                      {confirmingId === o.id ? '⏳...' : '✅ Confirm Receipt of Payment'}
+                    </button>
+                  </div>
+                )}
+                {o.status === 'settled' && <p style={{ color: '#4ADE80', fontSize: '12px', margin: '6px 0 0' }}>✅ Settled {o.settled_at?.slice(0,10)}</p>}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
 
   const renderNotifications = () => (
     <div>
@@ -1047,6 +1223,9 @@ const [myDisputes, setMyDisputes] = useState<any[]>([])
   }
   const handleSubmitWork = async () => {
     if (!submitWorkAppId || !submitWorkForm.description.trim()) return
+    if (!submitWorkForm.deliverable_url.trim()) {
+      showToast('A deliverable link is required (GitHub, Drive, deployed URL, etc.)', 'error'); return
+    }
     setSubmittingWork(true)
     try {
       await submitWork(submitWorkAppId, {
@@ -1145,6 +1324,50 @@ const [myDisputes, setMyDisputes] = useState<any[]>([])
       </div>
     </div>
   )
+
+  const renderScores = (): React.ReactElement => {
+    const cardStyle: React.CSSProperties = { background: '#0D1628', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', padding: '20px', marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }
+    return (
+      <div>
+        <h2 style={{ fontSize: '20px', fontWeight: 700, marginBottom: '8px' }}>⭐ My Scores</h2>
+        <p style={{ color: '#64748B', fontSize: '13px', marginBottom: '24px' }}>Admin-reviewed scores for your completed projects.</p>
+        {myScores.length === 0 && (
+          <div style={{ textAlign: 'center', padding: '60px 20px', color: '#64748B' }}>
+            <div style={{ fontSize: '40px', marginBottom: '12px' }}>📊</div>
+            <div style={{ fontSize: '15px', fontWeight: 600, marginBottom: '6px' }}>No scores yet</div>
+            <div style={{ fontSize: '13px' }}>Scores appear here once an admin reviews your completed projects.</div>
+          </div>
+        )}
+        {myScores.map((s: any) => (
+          <div key={s.id} style={cardStyle}>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: '15px' }}>{s.project_name}</div>
+              <div style={{ color: '#94A3B8', fontSize: '12px', marginTop: '2px' }}>{s.type === 'personal_project' ? '💡 Personal Project' : '📋 Application'}</div>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '10px' }}>
+                {[
+                  { label: 'NGO Rating', val: s.ngo_rating_score, color: '#00A651' },
+                  { label: 'Outcome', val: s.outcome_score, color: '#0891D4' },
+                  { label: 'Admin Quality', val: s.admin_quality_score, color: '#F59E0B' },
+                  { label: 'SDG Impact', val: s.sdg_impact_score, color: '#8B5CF6' },
+                  { label: 'Peer', val: s.peer_score, color: '#EC4899' },
+                ].map(({ label, val, color }) => val != null && (
+                  <span key={label} style={{ background: 'rgba(255,255,255,0.05)', border: `1px solid ${color}`, color, borderRadius: '6px', padding: '3px 10px', fontSize: '12px', fontWeight: 600 }}>
+                    {label}: {val}/10
+                  </span>
+                ))}
+              </div>
+              <div style={{ fontSize: '11px', color: '#475569', marginTop: '8px' }}>Scored {new Date(s.scored_at).toLocaleDateString()}</div>
+            </div>
+            <div style={{ textAlign: 'center', minWidth: '80px' }}>
+              <div style={{ fontSize: '36px', fontWeight: 800, background: 'linear-gradient(135deg,#0A6EBD,#00A651)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>{s.total_score}</div>
+              <div style={{ fontSize: '12px', color: '#64748B' }}>out of {s.max_score ?? 50}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    )
+  }
+
 const TAB_RENDER: Record<string, () => React.ReactElement> = {
     overview:      renderOverview,
     projects:      renderProjects,
@@ -1156,6 +1379,7 @@ const TAB_RENDER: Record<string, () => React.ReactElement> = {
     messages:      renderMessages,
     disputes:      renderDisputes,
     notifications: renderNotifications,
+    scores:        renderScores,
     profile:       renderProfile,
   }
 
@@ -1258,7 +1482,7 @@ const TAB_RENDER: Record<string, () => React.ReactElement> = {
             </div>
             <div>
               <label style={{ color: "#94A3B8", fontSize: "12px", display: "block", marginBottom: "6px" }}>DELIVERABLE URL (optional)</label>
-              <input value={submitWorkForm.deliverable_url} onChange={e => setSubmitWorkForm(p => ({...p, deliverable_url: e.target.value}))} placeholder="https://github.com/... or Google Drive link" style={{ width: "100%", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px", padding: "8px 12px", color: "#F1F5F9", fontSize: "14px", outline: "none", boxSizing: "border-box" }} />
+              <input value={submitWorkForm.deliverable_url} onChange={e => setSubmitWorkForm(p => ({...p, deliverable_url: e.target.value}))} placeholder="https://github.com/... or deployed URL (required)" style={{ width: "100%", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px", padding: "8px 12px", color: "#F1F5F9", fontSize: "14px", outline: "none", boxSizing: "border-box" }} />
             </div>
             <div>
               <label style={{ color: "#94A3B8", fontSize: "12px", display: "block", marginBottom: "6px" }}>HOURS WORKED (optional)</label>

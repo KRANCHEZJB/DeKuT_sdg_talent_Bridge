@@ -16,7 +16,10 @@ import {
   getAllBootcamps, verifyBootcamp,
   getAwardCategories, createAwardCategory, issueAward, getAwards,
   getPendingCertificates, issueCertificate,
+  getAdminAdoptionRequests, createAdoptionAgreement, signAgreement,
+  getAdminReceipts, verifyReceipt, createReimbursementObligation, getAdminReimbursements,
   suspendUser, banUser, reactivateUser, adminCloseProject,
+  scoreApplication, scorePersonalProject, getAllScores, getUnscoredApplications,
   getUserAuditLog, cancelDeletion, purgeUser, processScheduledDeletions,
 } from '../api/api'
 import StatusBadge from '../components/StatusBadge'
@@ -36,9 +39,12 @@ const TAB_CONFIG = [
   { key: 'user_mgmt',     label: 'User Management',  icon: '🛡️' },
   { key: 'disputes',      label: 'Disputes',         icon: '⚖️' },
   { key: 'certificates',  label: 'Certificates',     icon: '🏆' },
+  { key: 'adoptions',     label: 'Adoptions',        icon: '🤝' },
+  { key: 'reimbursements', label: 'Reimbursements',   icon: '💰' },
   { key: 'letters',       label: 'Rec. Letters',     icon: '📄' },
   { key: 'bootcamps',     label: 'Bootcamps',        icon: '🎓' },
   { key: 'awards',        label: 'Awards',           icon: '🏅' },
+  { key: 'scoring',       label: 'Scoring',          icon: '⭐' },
   { key: 'impact',        label: 'Impact Dashboard', icon: '📈' },
   { key: 'audit',         label: 'Audit Log',        icon: '📋' },
 ]
@@ -131,6 +137,8 @@ export default function AdminDashboard() {
 
   const { data: impactData, loading: impactLoading } =
     useFetch<any>(s => getAdminImpact(s), [activeTab === 'impact'])
+  const { data: scores, loading: scoresLoading, refetch: refetchScores } = useFetch<any[]>(s => getAllScores(s), [activeTab === 'scoring'])
+  const { data: unscored, loading: unscoredLoading, refetch: refetchUnscored } = useFetch<any[]>(s => getUnscoredApplications(s), [activeTab === 'scoring'])
 
   // ── Filtered + paginated data ─────────────────────────────────────────────
   const filteredStudentQueue = useMemo(() =>
@@ -1065,6 +1073,78 @@ const [allBootcamps, setAllBootcamps] = useState<any[]>([])
   const [awardCategories, setAwardCategories] = useState<any[]>([])
   const [showCategoryForm, setShowCategoryForm] = useState(false)
   const [showIssueForm, setShowIssueForm] = useState(false)
+  const [adminReceipts, setAdminReceipts] = React.useState<any[]>([])
+  const [adminReimbursements, setAdminReimbursements] = React.useState<any[]>([])
+  const [receiptFilter, setReceiptFilter] = React.useState('pending')
+  const [disputeReason, setDisputeReason] = React.useState<{[id:string]:string}>({})
+  const [dueDateMap, setDueDateMap] = React.useState<{[appId:string]:string}>({})
+  const [processingReceipt, setProcessingReceipt] = React.useState<string|null>(null)
+  const [creatingObligation, setCreatingObligation] = React.useState<string|null>(null)
+  const loadReimbursements = async () => {
+    try {
+      const [rRes, oRes] = await Promise.all([getAdminReceipts(receiptFilter), getAdminReimbursements()])
+      setAdminReceipts(rRes.data || [])
+      setAdminReimbursements(oRes.data || [])
+    } catch {}
+  }
+  const handleVerifyReceipt = async (id: string, action: string) => {
+    const reason = disputeReason[id] || ''
+    if (action === 'dispute' && !reason.trim()) { showToast('Enter dispute reason','error'); return }
+    setProcessingReceipt(id)
+    try {
+      await verifyReceipt(id, action, action==='dispute'?reason:undefined)
+      showToast(action==='approve'?'Receipt verified!':'Receipt disputed','success')
+      loadReimbursements()
+    } catch (err:any) { showToast(err.response?.data?.detail||'Error','error') }
+    finally { setProcessingReceipt(null) }
+  }
+  const handleCreateObligation = async (appId: string) => {
+    const due = dueDateMap[appId]
+    if (!due) { showToast('Select a due date','error'); return }
+    setCreatingObligation(appId)
+    try {
+      const res = await createReimbursementObligation(appId, due)
+      showToast(`Obligation created: ${res.data.total} total`,'success')
+      loadReimbursements()
+    } catch (err:any) { showToast(err.response?.data?.detail||'Error','error') }
+    finally { setCreatingObligation(null) }
+  }
+  const [adoptionRequests, setAdoptionRequests] = React.useState<any[]>([])
+  const [agreeFormId, setAgreeFormId] = React.useState<string | null>(null)
+  const [agreeForm, setAgreeForm] = React.useState({ rights_granted_text: '', rights_excluded_text: '', credit_requirement: '', compensation_amount: '', payment_deadline: '' })
+  const [submittingAgree, setSubmittingAgree] = React.useState(false)
+  const loadAdoptions = async () => {
+    try { const res = await getAdminAdoptionRequests(); setAdoptionRequests(res.data) } catch {}
+  }
+  const handleCreateAgreement = async () => {
+    if (!agreeFormId) return
+    if (!agreeForm.rights_granted_text.trim() || !agreeForm.rights_excluded_text.trim() || !agreeForm.credit_requirement.trim() || !agreeForm.compensation_amount) {
+      showToast('Please fill all required fields', 'error'); return
+    }
+    setSubmittingAgree(true)
+    try {
+      await createAdoptionAgreement(agreeFormId, {
+        rights_granted_text: agreeForm.rights_granted_text,
+        rights_excluded_text: agreeForm.rights_excluded_text,
+        credit_requirement: agreeForm.credit_requirement,
+        compensation_amount: parseFloat(agreeForm.compensation_amount),
+        payment_deadline: agreeForm.payment_deadline || null
+      })
+      showToast('Agreement created and parties notified!', 'success')
+      setAgreeFormId(null)
+      setAgreeForm({ rights_granted_text: '', rights_excluded_text: '', credit_requirement: '', compensation_amount: '', payment_deadline: '' })
+      loadAdoptions()
+    } catch (err: any) {
+      showToast(err.response?.data?.detail || 'Could not create agreement', 'error')
+    } finally { setSubmittingAgree(false) }
+  }
+  const handleAdminSign = async (agreementId: string) => {
+    try {
+      await signAgreement(agreementId)
+      showToast('Agreement signed!', 'success')
+      loadAdoptions()
+    } catch (err: any) { showToast(err.response?.data?.detail || 'Could not sign', 'error') }
+  }
   const [awardForm, setAwardForm] = useState({ category_id: '', winner_student_id: '', award_period: '', cash_amount: '', certificate_url: '' })
   const [categoryForm, setCategoryForm] = useState({ name: '', description: '', track: 'personal', frequency: 'semester' })
   const [submittingAward, setSubmittingAward] = useState(false)
@@ -1241,6 +1321,8 @@ const [allBootcamps, setAllBootcamps] = useState<any[]>([])
   }
 
   React.useEffect(() => { if (activeTab === 'certificates') loadPendingCerts() }, [activeTab])
+  React.useEffect(() => { if (activeTab === 'adoptions') loadAdoptions() }, [activeTab])
+  React.useEffect(() => { if (activeTab === 'reimbursements') loadReimbursements() }, [activeTab, receiptFilter])
   const renderCertificates = () => {
     return (
       <div>
@@ -1413,6 +1495,336 @@ const [allBootcamps, setAllBootcamps] = useState<any[]>([])
     )
   }
 
+
+  const renderReimbursements = () => {
+    const statusColor = (s: string) => ({ pending:'#FDB913', verified:'#4ADE80', disputed:'#FC8181' }[s]||'#94A3B8')
+    const oStatusColor = (s: string) => ({ pending:'#FDB913', paid_pending_confirmation:'#60B4F0', settled:'#4ADE80' }[s]||'#94A3B8')
+    // Group receipts by application_id to show "Create Obligation" per app
+    const appGroups: Record<string, any[]> = {}
+    adminReceipts.forEach((r:any) => {
+      if (!appGroups[r.application_id]) appGroups[r.application_id] = []
+      appGroups[r.application_id].push(r)
+    })
+    return (
+      <div>
+        <div style={{ marginBottom: '24px' }}>
+          <h1 style={{ fontSize: '24px', fontWeight: 800, marginBottom: '4px' }}>Funding & Reimbursements</h1>
+          <p style={{ color: '#94A3B8', fontSize: '14px' }}>Verify receipts and manage reimbursement obligations</p>
+        </div>
+        {/* Receipt filter */}
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '20px', flexWrap: 'wrap' }}>
+          {['pending','verified','disputed'].map(f => (
+            <button key={f} onClick={() => setReceiptFilter(f)}
+              style={{ padding: '6px 16px', borderRadius: '20px', border: `1px solid ${receiptFilter===f?'#0A6EBD':'rgba(255,255,255,0.1)'}`, background: receiptFilter===f?'rgba(10,110,189,0.2)':'transparent', color: receiptFilter===f?'#60B4F0':'#94A3B8', cursor: 'pointer', fontFamily: 'Inter, sans-serif', fontSize: '12px', fontWeight: 600, textTransform: 'capitalize' }}>
+              {f}
+            </button>
+          ))}
+        </div>
+        {/* Receipts */}
+        <h3 style={{ fontSize: '14px', fontWeight: 700, color: '#F1F5F9', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Receipts</h3>
+        {adminReceipts.length === 0 ? <p style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '24px' }}>No {receiptFilter} receipts.</p> : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '32px' }}>
+            {adminReceipts.map((r: any) => (
+              <div key={r.id} style={{ background: '#132038', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', padding: '16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px', marginBottom: '8px' }}>
+                  <div>
+                    <p style={{ color: '#F1F5F9', fontWeight: 600, fontSize: '14px', margin: '0 0 2px' }}>{r.purpose}</p>
+                    <p style={{ color: '#94A3B8', fontSize: '12px', margin: 0 }}>{r.student_name} · {r.project_name} · {r.ngo_name} · {r.supplier_name} · {r.receipt_date}</p>
+                    {r.receipt_image_url && <a href={r.receipt_image_url} target="_blank" rel="noreferrer" style={{ fontSize: '12px', color: '#A78BFA' }}>🔗 View</a>}
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <p style={{ color: '#F1F5F9', fontWeight: 700, fontSize: '15px', margin: '0 0 4px' }}>{r.currency} {Number(r.amount).toLocaleString()}</p>
+                    <span style={{ padding: '2px 10px', borderRadius: '999px', fontSize: '11px', fontWeight: 700, background: `${statusColor(r.status)}22`, border: `1px solid ${statusColor(r.status)}44`, color: statusColor(r.status) }}>{r.status}</span>
+                  </div>
+                </div>
+                {r.status === 'pending' && (
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginTop: '8px' }}>
+                    <button onClick={() => handleVerifyReceipt(r.id, 'approve')} disabled={processingReceipt===r.id}
+                      style={{ padding: '6px 14px', borderRadius: '8px', border: 'none', background: '#00A651', color: '#fff', cursor: 'pointer', fontFamily: 'Inter, sans-serif', fontSize: '12px', fontWeight: 700 }}>✅ Approve</button>
+                    <input value={disputeReason[r.id]||''} onChange={e => setDisputeReason(p=>({...p,[r.id]:e.target.value}))} placeholder="Dispute reason..."
+                      style={{ flex: 1, minWidth: '160px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', padding: '6px 10px', color: '#F1F5F9', fontSize: '12px', outline: 'none' }} />
+                    <button onClick={() => handleVerifyReceipt(r.id, 'dispute')} disabled={processingReceipt===r.id}
+                      style={{ padding: '6px 14px', borderRadius: '8px', border: 'none', background: 'rgba(229,62,62,0.2)', color: '#FC8181', cursor: 'pointer', fontFamily: 'Inter, sans-serif', fontSize: '12px', fontWeight: 700 }}>⚠️ Dispute</button>
+                  </div>
+                )}
+                {r.dispute_reason && <p style={{ color: '#FC8181', fontSize: '12px', marginTop: '6px' }}>Reason: {r.dispute_reason}</p>}
+              </div>
+            ))}
+          </div>
+        )}
+        {/* Create Obligations */}
+        {receiptFilter === 'verified' && Object.keys(appGroups).length > 0 && (
+          <div style={{ marginBottom: '32px' }}>
+            <h3 style={{ fontSize: '14px', fontWeight: 700, color: '#F1F5F9', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Create Reimbursement Obligations</h3>
+            {Object.entries(appGroups).map(([appId, receipts]) => {
+              const total = receipts.reduce((s:number,r:any)=>s+Number(r.amount),0)
+              const first = receipts[0]
+              const hasObligation = adminReimbursements.some((o:any)=>o.application_id===appId)
+              if (hasObligation) return null
+              return (
+                <div key={appId} style={{ background: '#132038', border: '1px solid rgba(253,185,19,0.15)', borderRadius: '12px', padding: '16px', marginBottom: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                  <div>
+                    <p style={{ color: '#F1F5F9', fontWeight: 600, fontSize: '14px', margin: '0 0 2px' }}>{first.project_name}</p>
+                    <p style={{ color: '#94A3B8', fontSize: '12px', margin: 0 }}>{first.student_name} · {receipts.length} receipt(s) · Total: {first.currency} {total.toLocaleString()}</p>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <input type="date" value={dueDateMap[appId]||''} onChange={e => setDueDateMap(p=>({...p,[appId]:e.target.value}))}
+                      style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', padding: '6px 10px', color: '#F1F5F9', fontSize: '12px', outline: 'none' }} />
+                    <button onClick={() => handleCreateObligation(appId)} disabled={creatingObligation===appId}
+                      style={{ padding: '7px 16px', borderRadius: '8px', border: 'none', background: '#0A6EBD', color: '#fff', cursor: 'pointer', fontFamily: 'Inter, sans-serif', fontSize: '12px', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                      {creatingObligation===appId ? '⏳...' : '💰 Create Obligation'}
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+        {/* All Obligations */}
+        <h3 style={{ fontSize: '14px', fontWeight: 700, color: '#F1F5F9', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>All Obligations</h3>
+        {adminReimbursements.length === 0 ? <p style={{ color: '#94A3B8', fontSize: '13px' }}>No obligations yet.</p> : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {adminReimbursements.map((o:any) => (
+              <div key={o.id} style={{ background: '#132038', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                <div>
+                  <p style={{ color: '#F1F5F9', fontWeight: 600, fontSize: '14px', margin: '0 0 2px' }}>{o.project_name}</p>
+                  <p style={{ color: '#94A3B8', fontSize: '12px', margin: 0 }}>{o.student_name} ← {o.ngo_name} · due {o.due_date}</p>
+                  {o.payment_reference && <p style={{ color: '#94A3B8', fontSize: '12px', margin: '2px 0 0' }}>ref: {o.payment_reference} via {o.payment_method}</p>}
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <p style={{ color: '#F1F5F9', fontWeight: 700, fontSize: '15px', margin: '0 0 4px' }}>{o.currency} {Number(o.total_verified_amount).toLocaleString()}</p>
+                  <span style={{ padding: '2px 10px', borderRadius: '999px', fontSize: '11px', fontWeight: 700, background: `${oStatusColor(o.status)}22`, border: `1px solid ${oStatusColor(o.status)}44`, color: oStatusColor(o.status) }}>
+                    {o.status === 'paid_pending_confirmation' ? '⏳ Awaiting Confirmation' : o.status}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  const renderAdoptions = () => (
+    <div>
+      <div style={{ marginBottom: '24px' }}>
+        <h1 style={{ fontSize: '24px', fontWeight: 800, marginBottom: '4px' }}>Adoption Requests</h1>
+        <p style={{ color: '#94A3B8', fontSize: '14px' }}>Review NGO adoption requests and create legal agreements</p>
+      </div>
+      {adoptionRequests.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '60px 20px', color: '#94A3B8' }}>
+          <div style={{ fontSize: '48px', marginBottom: '16px' }}>🤝</div>
+          <p style={{ fontSize: '16px', fontWeight: 600, color: '#F1F5F9', marginBottom: '8px' }}>No adoption requests yet</p>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          {adoptionRequests.map((req: any) => (
+            <div key={req.id} style={{ background: '#132038', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '14px', padding: '20px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
+                <div>
+                  <h3 style={{ fontSize: '15px', fontWeight: 700, color: '#F1F5F9', margin: '0 0 4px' }}>{req.project_title}</h3>
+                  <p style={{ fontSize: '12px', color: '#94A3B8', margin: 0 }}>by {req.student_name} ({req.student_reg}) · {req.ngo_name}</p>
+                </div>
+                <span style={{ padding: '3px 10px', borderRadius: '999px', fontSize: '11px', fontWeight: 700,
+                  background: req.status === 'fully_executed' ? 'rgba(74,222,128,0.1)' : req.status === 'approved' ? 'rgba(96,180,240,0.1)' : 'rgba(253,185,19,0.1)',
+                  border: `1px solid ${req.status === 'fully_executed' ? 'rgba(74,222,128,0.2)' : req.status === 'approved' ? 'rgba(96,180,240,0.2)' : 'rgba(253,185,19,0.2)'}`,
+                  color: req.status === 'fully_executed' ? '#4ADE80' : req.status === 'approved' ? '#60B4F0' : '#FDB913' }}>
+                  {req.status === 'fully_executed' ? '✅ Executed' : req.status === 'approved' ? '📋 Agreement Active' : '⏳ Pending'}
+                </span>
+              </div>
+              <p style={{ fontSize: '13px', color: '#CBD5E1', marginBottom: '6px' }}><span style={{ color: '#60B4F0', fontWeight: 600 }}>Intended use: </span>{req.intended_use}</p>
+              <p style={{ fontSize: '13px', color: '#94A3B8', marginBottom: '6px' }}>Level {req.adoption_level} · {req.deployment_scale} · Offered: {req.compensation_offered}</p>
+              {req.has_agreement && (
+                <div style={{ marginTop: '12px', padding: '12px', background: 'rgba(255,255,255,0.03)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.06)', marginBottom: '10px' }}>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
+                    {[['Student', req.student_signed], ['NGO', req.ngo_signed], ['Admin', req.admin_signed]].map(([label, signed]) => (
+                      <span key={label as string} style={{ padding: '2px 8px', borderRadius: '999px', fontSize: '11px', fontWeight: 600, background: signed ? 'rgba(74,222,128,0.1)' : 'rgba(148,163,184,0.1)', border: `1px solid ${signed ? 'rgba(74,222,128,0.2)' : 'rgba(148,163,184,0.1)'}`, color: signed ? '#4ADE80' : '#94A3B8' }}>
+                        {signed ? '✅' : '⏳'} {label as string}
+                      </span>
+                    ))}
+                  </div>
+                  {!req.admin_signed && (
+                    <button onClick={() => handleAdminSign(req.agreement_id)} style={{ padding: '7px 14px', borderRadius: '8px', border: 'none', background: '#00A651', color: '#fff', cursor: 'pointer', fontFamily: 'Inter, sans-serif', fontSize: '12px', fontWeight: 700 }}>✍️ Admin Sign</button>
+                  )}
+                </div>
+              )}
+              {!req.has_agreement && req.status === 'pending' && (
+                <button onClick={() => setAgreeFormId(req.id)} style={{ marginTop: '8px', padding: '8px 16px', borderRadius: '8px', border: 'none', background: '#0A6EBD', color: '#fff', cursor: 'pointer', fontFamily: 'Inter, sans-serif', fontSize: '13px', fontWeight: 700 }}>📋 Create Agreement</button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {agreeFormId && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+          <div style={{ background: '#1E293B', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '16px', padding: '28px', width: '100%', maxWidth: '560px', maxHeight: '90vh', overflowY: 'auto' }}>
+            <h3 style={{ color: '#F1F5F9', fontWeight: 700, marginBottom: '20px', fontSize: '18px' }}>📋 Create Adoption Agreement</h3>
+            {([['Rights Granted', 'rights_granted_text', 'What rights is the NGO granted?'], ['Rights Excluded', 'rights_excluded_text', 'What rights are explicitly excluded?'], ['Credit Requirement', 'credit_requirement', 'How must the student be credited?']] as [string,string,string][]).map(([label, key, ph]) => (
+              <div key={key} style={{ marginBottom: '14px' }}>
+                <label style={{ color: '#94A3B8', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: '6px' }}>{label} *</label>
+                <textarea rows={3} value={(agreeForm as any)[key]} onChange={e => setAgreeForm(p => ({...p, [key]: e.target.value}))} placeholder={ph}
+                  style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', padding: '10px 12px', color: '#F1F5F9', fontSize: '13px', outline: 'none', resize: 'vertical', boxSizing: 'border-box', fontFamily: 'Inter, sans-serif' }} />
+              </div>
+            ))}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px' }}>
+              <div>
+                <label style={{ color: '#94A3B8', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: '6px' }}>Compensation (KES) *</label>
+                <input type="number" value={agreeForm.compensation_amount} onChange={e => setAgreeForm(p => ({...p, compensation_amount: e.target.value}))} placeholder="50000"
+                  style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', padding: '8px 12px', color: '#F1F5F9', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+              </div>
+              <div>
+                <label style={{ color: '#94A3B8', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: '6px' }}>Payment Deadline</label>
+                <input type="date" value={agreeForm.payment_deadline} onChange={e => setAgreeForm(p => ({...p, payment_deadline: e.target.value}))}
+                  style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', padding: '8px 12px', color: '#F1F5F9', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+              <button onClick={() => setAgreeFormId(null)} style={{ padding: '10px 20px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)', background: 'transparent', color: '#94A3B8', cursor: 'pointer', fontFamily: 'Inter, sans-serif', fontSize: '13px', fontWeight: 600 }}>Cancel</button>
+              <button onClick={handleCreateAgreement} disabled={submittingAgree} style={{ padding: '10px 20px', borderRadius: '8px', border: 'none', background: '#0A6EBD', color: '#fff', cursor: 'pointer', fontFamily: 'Inter, sans-serif', fontSize: '13px', fontWeight: 700, opacity: submittingAgree ? 0.6 : 1 }}>
+                {submittingAgree ? '⏳ Creating...' : '📋 Create Agreement'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+
+
+
+  // ── Scoring Tab ─────────────────────────────────────────────────────────────
+  const [scoreForm, setScoreForm] = React.useState<Record<string, any>>({})
+  const [scoreSubmitting, setScoreSubmitting] = React.useState<string | null>(null)
+
+  const handleScoreSubmit = async (itemKey: string, item: any) => {
+    const form = scoreForm[itemKey] || {}
+    if (!form.admin_quality_score || !form.sdg_impact_score) {
+      showToast('Admin quality score and SDG impact score are required', 'error'); return
+    }
+    setScoreSubmitting(itemKey)
+    const payload = {
+      admin_quality_score: Number(form.admin_quality_score),
+      sdg_impact_score: Number(form.sdg_impact_score),
+      peer_score: form.peer_score ? Number(form.peer_score) : undefined,
+    }
+    try {
+      if (item.type === 'personal_project') {
+        await scorePersonalProject(item.personal_project_id, payload)
+      } else {
+        await scoreApplication(item.application_id, payload)
+      }
+      showToast('Project scored successfully!', 'success')
+      setScoreForm(prev => { const n = {...prev}; delete n[itemKey]; return n })
+      refetchUnscored()
+      refetchScores()
+    } catch { showToast('Failed to score project', 'error') }
+    finally { setScoreSubmitting(null) }
+  }
+
+  const renderScoring = (): React.ReactElement => {
+    const cardStyle: React.CSSProperties = { background: '#0D1628', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', padding: '20px', marginBottom: '16px' }
+    const labelStyle: React.CSSProperties = { fontSize: '11px', color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }
+    const inputStyle: React.CSSProperties = { width: '72px', background: '#060D1F', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: '#F1F5F9', padding: '6px 10px', fontSize: '14px', fontFamily: 'Inter, sans-serif' }
+    const btnStyle: React.CSSProperties = { background: 'linear-gradient(135deg,#0A6EBD,#00A651)', border: 'none', borderRadius: '8px', color: '#fff', padding: '8px 18px', fontSize: '13px', fontWeight: 600, cursor: 'pointer', fontFamily: 'Inter, sans-serif' }
+
+    return (
+      <div>
+        <h2 style={{ fontSize: '20px', fontWeight: 700, marginBottom: '24px' }}>⭐ Scoring</h2>
+
+        {/* Unscored Applications */}
+        <h3 style={{ fontSize: '15px', fontWeight: 600, color: '#94A3B8', marginBottom: '16px' }}>
+          Pending Score ({unscored?.length ?? 0})
+        </h3>
+        {unscoredLoading && <LoadingSpinner />}
+        {!unscoredLoading && (!unscored || unscored.length === 0) && (
+          <EmptyState icon="✅" message="All completed projects have been scored" />
+        )}
+        {(unscored || []).map((item: any) => {
+          const fk = item.type === 'personal_project' ? item.personal_project_id : item.application_id
+          const form = scoreForm[fk] || {}
+          return (
+            <div key={fk} style={cardStyle}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '15px' }}>{item.project_name}</div>
+                  <div style={{ color: '#94A3B8', fontSize: '13px', marginTop: '2px' }}>{item.student_name} · {item.student_reg}</div>
+                  <div style={{ marginTop: '6px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    {item.type === 'personal_project' && <span style={{ background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.2)', color: '#A78BFA', borderRadius: '6px', padding: '2px 8px', fontSize: '12px' }}>💡 Personal Project</span>}
+                    {item.quality_rating && <span style={{ background: 'rgba(0,166,81,0.1)', border: '1px solid rgba(0,166,81,0.2)', color: '#00A651', borderRadius: '6px', padding: '2px 8px', fontSize: '12px' }}>NGO Quality: {item.quality_rating}/10</span>}
+                    <span style={{ background: 'rgba(100,116,139,0.1)', border: '1px solid rgba(100,116,139,0.2)', color: '#94A3B8', borderRadius: '6px', padding: '2px 8px', fontSize: '12px' }}>{item.status}</span>
+                  </div>
+                </div>
+              </div>
+              {item.outcome_summary && (
+                <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '8px', padding: '10px 14px', fontSize: '13px', color: '#CBD5E1', marginBottom: '14px', lineHeight: 1.5 }}>
+                  {item.outcome_summary}
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                <div>
+                  <div style={labelStyle}>Admin Quality (1–10) *</div>
+                  <input type="number" min={1} max={10} style={inputStyle}
+                    value={form.admin_quality_score || ''}
+                    onChange={e => setScoreForm(prev => ({ ...prev, [fk]: { ...prev[fk], admin_quality_score: e.target.value } }))} />
+                </div>
+                <div>
+                  <div style={labelStyle}>SDG Impact (1–10) *</div>
+                  <input type="number" min={1} max={10} style={inputStyle}
+                    value={form.sdg_impact_score || ''}
+                    onChange={e => setScoreForm(prev => ({ ...prev, [fk]: { ...prev[fk], sdg_impact_score: e.target.value } }))} />
+                </div>
+                <div>
+                  <div style={labelStyle}>Peer Score (1–10)</div>
+                  <input type="number" min={1} max={10} style={inputStyle}
+                    value={form.peer_score || ''}
+                    onChange={e => setScoreForm(prev => ({ ...prev, [fk]: { ...prev[fk], peer_score: e.target.value } }))} />
+                </div>
+                <button style={btnStyle} disabled={scoreSubmitting === fk}
+                  onClick={() => handleScoreSubmit(fk, item)}>
+                  {scoreSubmitting === fk ? 'Saving...' : 'Submit Score'}
+                </button>
+              </div>
+            </div>
+          )
+        })}
+
+        {/* Scored Projects */}
+        <h3 style={{ fontSize: '15px', fontWeight: 600, color: '#94A3B8', margin: '32px 0 16px' }}>
+          Scored Projects ({scores?.length ?? 0})
+        </h3>
+        {scoresLoading && <LoadingSpinner />}
+        {!scoresLoading && (!scores || scores.length === 0) && (
+          <EmptyState icon="📊" message="No scored projects yet" />
+        )}
+        {(scores || []).map((s: any) => (
+          <div key={s.id} style={{ ...cardStyle, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+            <div>
+              <div style={{ fontWeight: 600, fontSize: '14px' }}>{s.project_name}</div>
+              <div style={{ color: '#94A3B8', fontSize: '12px', marginTop: '2px' }}>{s.student_name} · {s.type === 'personal_project' ? 'Personal Project' : 'Application'}</div>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '8px' }}>
+                {[
+                  { label: 'NGO', val: s.ngo_rating_score },
+                  { label: 'Outcome', val: s.outcome_score },
+                  { label: 'Admin', val: s.admin_quality_score },
+                  { label: 'SDG', val: s.sdg_impact_score },
+                  { label: 'Peer', val: s.peer_score },
+                ].map(({ label, val }) => val != null && (
+                  <span key={label} style={{ background: 'rgba(10,110,189,0.1)', border: '1px solid rgba(10,110,189,0.2)', color: '#60A5FA', borderRadius: '6px', padding: '2px 8px', fontSize: '12px' }}>
+                    {label}: {val}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: '28px', fontWeight: 800, color: '#00A651' }}>{s.total_score}<span style={{ fontSize: '14px', color: '#64748B' }}>/{s.max_score ?? 50}</span></div>
+              <div style={{ fontSize: '11px', color: '#64748B', marginTop: '2px' }}>{new Date(s.scored_at).toLocaleDateString()}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    )
+  }
+
   const TAB_RENDER: Record<string, () => React.ReactElement> = {
     overview:      renderOverview,
     students:      renderStudentQueue,
@@ -1423,10 +1835,14 @@ const [allBootcamps, setAllBootcamps] = useState<any[]>([])
     all_orgs:      renderAllOrgs,
     user_mgmt:     renderUserMgmt,
     disputes:      renderDisputes,
+
     certificates:  renderCertificates,
+    adoptions:     renderAdoptions,
+    reimbursements: renderReimbursements,
     letters:       renderLetters,
     bootcamps:     renderBootcamps,
     awards:        renderAwards,
+    scoring:       renderScoring,
     impact:        renderImpact,
     audit:         renderAuditLog,
   }

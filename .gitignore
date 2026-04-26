@@ -8,3 +8,4 @@ dist/
 build/
 .env
 *.tsbuildinfo
+frontend/node_modules/

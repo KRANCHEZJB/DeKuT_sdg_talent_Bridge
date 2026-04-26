@@ -267,6 +267,42 @@ export const getMyStudentReviews = () =>
 
 export const getPendingCertificates = (signal?: AbortSignal) =>
   API.get('/admin/pending-certificates', { signal })
+export const downloadCertificatePdf = (certId: string) =>
+  API.get(`/certificates/${certId}/pdf`, { responseType: 'blob' })
+export const downloadLetterPdf = (letterId: string) =>
+  API.get(`/letters/${letterId}/pdf`, { responseType: 'blob' })
+export const submitReceipt = (applicationId: string, data: object) =>
+  API.post(`/applications/${applicationId}/receipts`, data)
+export const getApplicationReceipts = (applicationId: string) =>
+  API.get(`/applications/${applicationId}/receipts`)
+export const getMyReceipts = () =>
+  API.get('/my-receipts')
+export const getMyReimbursements = () =>
+  API.get('/my-reimbursements')
+export const getAdminReceipts = (status?: string) =>
+  API.get('/admin/receipts', { params: status ? { status_filter: status } : {} })
+export const verifyReceipt = (receiptId: string, action: string, disputeReason?: string) =>
+  API.patch(`/admin/receipts/${receiptId}/verify`, null, { params: { action, ...(disputeReason ? { dispute_reason: disputeReason } : {}) } })
+export const createReimbursementObligation = (applicationId: string, dueDate: string) =>
+  API.post(`/admin/applications/${applicationId}/reimbursement`, JSON.stringify(dueDate), { headers: { 'Content-Type': 'application/json' } })
+export const getAdminReimbursements = () =>
+  API.get('/admin/reimbursements')
+export const ngoMarkPaid = (obligationId: string, data: object) =>
+  API.patch(`/reimbursements/${obligationId}/mark-paid`, data)
+export const studentConfirmPayment = (obligationId: string) =>
+  API.patch(`/reimbursements/${obligationId}/confirm`)
+export const getShowcase = () =>
+  API.get('/showcase')
+export const requestAdoption = (projectId: string, data: object) =>
+  API.post(`/personal-projects/${projectId}/adopt`, data)
+export const getMyAdoptionRequests = () =>
+  API.get('/my-adoption-requests')
+export const signAgreement = (agreementId: string) =>
+  API.patch(`/adoption-agreements/${agreementId}/sign`)
+export const getAdminAdoptionRequests = () =>
+  API.get('/admin/adoption-requests')
+export const createAdoptionAgreement = (requestId: string, data: object) =>
+  API.post(`/admin/adoption-requests/${requestId}/agree`, data)
 export const submitOutcome = (applicationId: string, data: object) =>
   API.post(`/applications/${applicationId}/outcome`, data)
 export const submitReflection = (applicationId: string, data: object) =>
@@ -308,3 +344,15 @@ export const ngoCloseProject = (projectId: string) =>
 export const withdrawApplication = (applicationId: string) =>
   API.patch(`/applications/${applicationId}/withdraw`)
 
+
+// ── Scoring ──────────────────────────────────────────────────────────────────
+export const scoreApplication = (applicationId: string, data: object) =>
+  API.post(`/admin/applications/${applicationId}/score`, data)
+export const scorePersonalProject = (projectId: string, data: object) =>
+  API.post(`/admin/personal-projects/${projectId}/score`, data)
+export const getAllScores = (signal?: AbortSignal) =>
+  API.get('/admin/scores', { signal })
+export const getUnscoredApplications = (signal?: AbortSignal) =>
+  API.get('/admin/unscored', { signal })
+export const getMyScores = (signal?: AbortSignal) =>
+  API.get('/my-scores', { signal })

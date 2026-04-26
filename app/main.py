@@ -3,7 +3,8 @@ import re
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-from fastapi import FastAPI, Depends, HTTPException, status, Request, Query
+from fastapi import FastAPI, Depends, HTTPException, status, Request, Query, Body
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -17,7 +18,8 @@ from app.models import (
     PersonalProject, Notification, Certificate, RecommendationRequest,
     ProjectOutcome, StudentReflection, Bootcamp, BootcampAttendance,
     Dispute, AdoptionRequest, StudentReceipt, ReimbursementObligation,
-    AwardCategory, Award, WorkSubmission,
+    AwardCategory, Award, WorkSubmission, AwardFundTransaction, ProjectScore,
+    NgoReview,
     MessageThread, Message,
     Certificate,
     Bootcamp, AwardCategory, Award
@@ -53,6 +55,7 @@ from app.auth import (
     validate_student_email
 )
 from app.config import DEKUT_STUDENT_EMAIL_DOMAIN
+from app.pdf_generator import generate_certificate_pdf, generate_letter_pdf
 from app.sanitize import clean
 
 # ─── RATE LIMITER ─────────────────────────────────────────────────────────────
@@ -726,7 +729,7 @@ def submit_work(application_id: uuid.UUID, data: WorkSubmissionCreate, current_u
     application = db.query(Application).filter(Application.application_id == application_id, Application.student_id == student.id).first()
     if not application:
         raise HTTPException(status_code=404, detail="Application not found")
-    if application.status not in ("selected", "revision_requested"):
+    if application.status not in ("selected", "revision_requested", "work_submitted"):
         raise HTTPException(status_code=400, detail="Can only submit work for selected applications or when revision was requested")
     existing = db.query(WorkSubmission).filter(WorkSubmission.application_id == application_id).first()
     if existing:
@@ -869,12 +872,38 @@ def approve_completion(application_id: uuid.UUID, current_user: User = Depends(r
             create_notification(db, student.user_id, "certificate_issued", "🏆 Certificate Issued!", "Congratulations! Your project completion certificate has been issued.", "/student?tab=certificates")
     application.status = "officially_complete"
     application.officially_completed_at = datetime.utcnow()
+    # Generate PDF
+    if student:
+        cert_obj = db.query(Certificate).filter(Certificate.related_id == application.application_id).first()
+        if cert_obj and not cert_obj.pdf_url:
+            project = db.query(Project).filter(Project.id == application.project_id).first()
+            ngo = db.query(NgoProfile).filter(NgoProfile.id == project.ngo_id).first() if project else None
+            submission = db.query(WorkSubmission).filter(WorkSubmission.application_id == application.application_id).first()
+            outcome = db.query(ProjectOutcome).filter(ProjectOutcome.application_id == application.application_id).first()
+            try:
+                pdf_bytes = generate_certificate_pdf(
+                    student_name=student.display_name,
+                    registration_number=student.registration_number,
+                    project_name=project.project_name if project else "Project",
+                    ngo_name=ngo.organization_name if ngo else "Organisation",
+                    reference_number=cert_obj.reference_number,
+                    issued_at=datetime.utcnow(),
+                    hours_worked=submission.hours_worked if submission else None,
+                    outcome_summary=outcome.outcome_summary if outcome else None,
+                )
+                import base64
+                cert_obj.pdf_url = "data:application/pdf;base64," + base64.b64encode(pdf_bytes).decode()
+            except Exception as e:
+                print(f"PDF generation error: {e}")
     db.commit()
     return {"status": "certificate issued"}
 
 @app.get("/admin/pending-certificates")
 def get_pending_certificates(current_user: User = Depends(require_admin), db: Session = Depends(get_db)):
-    apps = db.query(Application).filter(Application.status == "pending_certificate").all()
+    try:
+        apps = db.query(Application).filter(Application.status == "pending_certificate").all()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"DB error: {str(e)}")
     result = []
     for app in apps:
         student = db.query(StudentProfile).filter(StudentProfile.id == app.student_id).first()
@@ -882,12 +911,13 @@ def get_pending_certificates(current_user: User = Depends(require_admin), db: Se
         submission = db.query(WorkSubmission).filter(WorkSubmission.application_id == app.application_id).first()
         outcome = db.query(ProjectOutcome).filter(ProjectOutcome.application_id == app.application_id).first()
         reflection = db.query(StudentReflection).filter(StudentReflection.application_id == app.application_id).first()
+        ngo = db.query(NgoProfile).filter(NgoProfile.id == project.ngo_id).first() if project else None
         result.append({
             "application_id": str(app.application_id),
-            "student_name": student.full_name if student else "Unknown",
+            "student_name": student.display_name if student else "Unknown",
             "student_reg": student.registration_number if student else "",
             "project_name": project.project_name if project else "Unknown",
-            "ngo_name": db.query(NgoProfile).filter(NgoProfile.id == project.ngo_id).first().org_name if project else "",
+            "ngo_name": ngo.organization_name if ngo else "",
             "submitted_at": submission.submitted_at.isoformat() if submission else None,
             "description": submission.description if submission else "",
             "deliverable_url": submission.deliverable_url if submission else None,
@@ -1006,6 +1036,874 @@ def get_personal_projects_showcase(db: Session = Depends(get_db)):
     ).order_by(PersonalProject.created_at.desc()).all()
 
 
+
+
+
+def _compute_total_score(score: "ProjectScore") -> int:
+    parts = [
+        score.ngo_rating_score or 0,
+        score.outcome_score or 0,
+        score.admin_quality_score or 0,
+        score.sdg_impact_score or 0,
+        score.peer_score or 0,
+    ]
+    return sum(parts)
+
+def _compute_max_score(score: "ProjectScore") -> int:
+    """Max is 10 per component, only counting components that are applicable."""
+    if score.personal_project_id:
+        # Personal projects: no NGO or outcome, peer is optional
+        base = 20  # admin + sdg
+        if score.peer_score is not None:
+            base += 10
+        return base
+    else:
+        # Applications: NGO and outcome only count if submitted
+        base = 20  # admin + sdg always count
+        if score.ngo_rating_score is not None:
+            base += 10
+        if score.outcome_score is not None:
+            base += 10
+        if score.peer_score is not None:
+            base += 10
+        return base
+
+def _score_to_dict(score: "ProjectScore", db) -> dict:
+    name = "Unknown"
+    type_ = "application"
+    if score.application_id:
+        app_obj = db.query(Application).filter(Application.application_id == score.application_id).first()
+        project = db.query(Project).filter(Project.id == app_obj.project_id).first() if app_obj else None
+        student = db.query(StudentProfile).filter(StudentProfile.id == app_obj.student_id).first() if app_obj else None
+        name = project.project_name if project else "Unknown"
+        student_name = student.display_name if student else "Unknown"
+    else:
+        proj = db.query(PersonalProject).filter(PersonalProject.id == score.personal_project_id).first()
+        student = db.query(StudentProfile).filter(StudentProfile.id == proj.student_id).first() if proj else None
+        name = proj.title if proj else "Unknown"
+        student_name = student.display_name if student else "Unknown"
+        type_ = "personal_project"
+    return {
+        "id": str(score.id),
+        "type": type_,
+        "project_name": name,
+        "student_name": student_name,
+        "application_id": str(score.application_id) if score.application_id else None,
+        "personal_project_id": str(score.personal_project_id) if score.personal_project_id else None,
+        "ngo_rating_score": score.ngo_rating_score,
+        "outcome_score": score.outcome_score,
+        "admin_quality_score": score.admin_quality_score,
+        "sdg_impact_score": score.sdg_impact_score,
+        "peer_score": score.peer_score,
+        "total_score": _compute_total_score(score),
+        "max_score": _compute_max_score(score),
+        "scored_at": score.scored_at.isoformat(),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SCORING
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.post("/admin/applications/{application_id}/score", response_model=dict, status_code=201)
+def score_application(
+    application_id: uuid.UUID,
+    admin_quality_score: int = Body(...),
+    sdg_impact_score: int = Body(...),
+    peer_score: Optional[int] = Body(None),
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    for val, name in [(admin_quality_score, "admin_quality_score"), (sdg_impact_score, "sdg_impact_score")]:
+        if not (1 <= val <= 10):
+            raise HTTPException(status_code=400, detail=f"{name} must be between 1 and 10")
+    if peer_score is not None and not (1 <= peer_score <= 10):
+        raise HTTPException(status_code=400, detail="peer_score must be between 1 and 10")
+    app_obj = db.query(Application).filter(Application.application_id == application_id).first()
+    if not app_obj:
+        raise HTTPException(status_code=404, detail="Application not found")
+    existing = db.query(ProjectScore).filter(ProjectScore.application_id == application_id).first()
+    # Always auto-pull ngo_rating and outcome_score (fresh each time)
+    outcome = db.query(ProjectOutcome).filter(ProjectOutcome.application_id == application_id).first()
+    ngo_review = db.query(NgoReview).filter(NgoReview.application_id == application_id).first() if hasattr(NgoReview, 'application_id') else None
+    # Normalize 1-5 ratings to 1-10 scale
+    ngo_rating_raw = getattr(ngo_review, 'quality_rating', None) if ngo_review else None
+    ngo_rating = round(ngo_rating_raw * 2) if ngo_rating_raw is not None else None
+    outcome_raw = outcome.quality_rating if outcome else None
+    outcome_score = round(outcome_raw * 2) if outcome_raw is not None else None
+
+    if existing:
+        existing.admin_quality_score = admin_quality_score
+        existing.sdg_impact_score = sdg_impact_score
+        existing.ngo_rating_score = ngo_rating
+        existing.outcome_score = outcome_score
+        if peer_score is not None:
+            existing.peer_score = peer_score
+        existing.scored_by = current_user.id
+        existing.scored_at = datetime.utcnow()
+        score_obj = existing
+    else:
+        score_obj = ProjectScore(
+            application_id=application_id,
+            ngo_rating_score=ngo_rating,
+            outcome_score=outcome_score,
+            admin_quality_score=admin_quality_score,
+            sdg_impact_score=sdg_impact_score,
+            peer_score=peer_score,
+            scored_by=current_user.id,
+        )
+        db.add(score_obj)
+    db.commit()
+    db.refresh(score_obj)
+    total = _compute_total_score(score_obj)
+    return {"status": "scored", "score_id": str(score_obj.id), "total_score": total}
+
+@app.post("/admin/personal-projects/{project_id}/score", response_model=dict, status_code=201)
+def score_personal_project(
+    project_id: uuid.UUID,
+    admin_quality_score: int = Body(...),
+    sdg_impact_score: int = Body(...),
+    peer_score: Optional[int] = Body(None),
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    for val, name in [(admin_quality_score, "admin_quality_score"), (sdg_impact_score, "sdg_impact_score")]:
+        if not (1 <= val <= 10):
+            raise HTTPException(status_code=400, detail=f"{name} must be between 1 and 10")
+    project = db.query(PersonalProject).filter(PersonalProject.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    existing = db.query(ProjectScore).filter(ProjectScore.personal_project_id == project_id).first()
+    if existing:
+        existing.admin_quality_score = admin_quality_score
+        existing.sdg_impact_score = sdg_impact_score
+        if peer_score is not None:
+            existing.peer_score = peer_score
+        existing.scored_by = current_user.id
+        existing.scored_at = datetime.utcnow()
+        score_obj = existing
+    else:
+        score_obj = ProjectScore(
+            personal_project_id=project_id,
+            admin_quality_score=admin_quality_score,
+            sdg_impact_score=sdg_impact_score,
+            peer_score=peer_score,
+            scored_by=current_user.id,
+        )
+        db.add(score_obj)
+    db.commit()
+    db.refresh(score_obj)
+    total = _compute_total_score(score_obj)
+    student = db.query(StudentProfile).filter(StudentProfile.id == project.student_id).first()
+    if student:
+        create_notification(
+            db, student.user_id, "project_scored",
+            "⭐ Your Project Has Been Scored",
+            f"Your project '{project.title}' received a score of {total}/50.",
+            "/student?tab=personal"
+        )
+    db.commit()
+    return {"status": "scored", "score_id": str(score_obj.id), "total_score": total}
+
+@app.get("/admin/scores", response_model=List[dict])
+def get_all_scores(
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    scores = db.query(ProjectScore).order_by(ProjectScore.scored_at.desc()).all()
+    return [_score_to_dict(s, db) for s in scores]
+
+@app.get("/admin/unscored", response_model=List[dict])
+def get_unscored_applications(
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    scored_app_ids = {s.application_id for s in db.query(ProjectScore).filter(ProjectScore.application_id != None).all()}
+    apps = db.query(Application).filter(
+        Application.status.in_(["officially_complete", "pending_certificate", "completed"]),
+        ~Application.application_id.in_(scored_app_ids)
+    ).all()
+    result = []
+    for a in apps:
+        student = db.query(StudentProfile).filter(StudentProfile.id == a.student_id).first()
+        project = db.query(Project).filter(Project.id == a.project_id).first()
+        outcome = db.query(ProjectOutcome).filter(ProjectOutcome.application_id == a.application_id).first()
+        result.append({
+            "type": "application",
+            "application_id": str(a.application_id),
+            "personal_project_id": None,
+            "student_name": student.display_name if student else "Unknown",
+            "student_reg": student.registration_number if student else "",
+            "project_name": project.project_name if project else "Unknown",
+            "status": a.status,
+            "outcome_summary": outcome.outcome_summary if outcome else None,
+            "quality_rating": outcome.quality_rating if outcome else None,
+            "completed_at": a.officially_completed_at.isoformat() if a.officially_completed_at else None,
+        })
+    # Personal projects
+    scored_pp_ids = {s.personal_project_id for s in db.query(ProjectScore).filter(ProjectScore.personal_project_id != None).all()}
+    pps = db.query(PersonalProject).filter(
+        PersonalProject.status.in_(["approved", "completed", "showcase_approved"]),
+        ~PersonalProject.id.in_(scored_pp_ids)
+    ).all()
+    for p in pps:
+        student = db.query(StudentProfile).filter(StudentProfile.id == p.student_id).first()
+        result.append({
+            "type": "personal_project",
+            "application_id": None,
+            "personal_project_id": str(p.id),
+            "student_name": student.display_name if student else "Unknown",
+            "student_reg": student.registration_number if student else "",
+            "project_name": p.title,
+            "status": p.status,
+            "outcome_summary": p.problem_statement,
+            "quality_rating": None,
+            "completed_at": None,
+        })
+    return result
+
+@app.get("/my-scores", response_model=List[dict])
+def get_my_scores(
+    current_user: User = Depends(require_student),
+    db: Session = Depends(get_db)
+):
+    student = db.query(StudentProfile).filter(StudentProfile.user_id == current_user.id).first()
+    if not student:
+        return []
+    app_ids = [a.application_id for a in db.query(Application).filter(Application.student_id == student.id).all()]
+    proj_ids = [p.id for p in db.query(PersonalProject).filter(PersonalProject.student_id == student.id).all()]
+    scores = db.query(ProjectScore).filter(
+        (ProjectScore.application_id.in_(app_ids)) | (ProjectScore.personal_project_id.in_(proj_ids))
+    ).all()
+    return [_score_to_dict(s, db) for s in scores]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# FUNDING & REIMBURSEMENT
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.post("/applications/{application_id}/receipts", response_model=dict, status_code=201)
+def submit_receipt(
+    application_id: uuid.UUID,
+    data: ReceiptCreate,
+    current_user: User = Depends(require_student),
+    db: Session = Depends(get_db)
+):
+    student = db.query(StudentProfile).filter(StudentProfile.user_id == current_user.id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student profile not found")
+    app_obj = db.query(Application).filter(
+        Application.application_id == application_id,
+        Application.student_id == student.id
+    ).first()
+    if not app_obj:
+        raise HTTPException(status_code=404, detail="Application not found")
+    if app_obj.status not in ("selected", "completed", "officially_completed"):
+        raise HTTPException(status_code=400, detail="You can only submit receipts for active or completed projects")
+    receipt = StudentReceipt(
+        application_id=application_id,
+        student_id=student.id,
+        amount=data.amount,
+        currency=data.currency,
+        purpose=data.purpose,
+        supplier_name=data.supplier_name,
+        receipt_date=data.receipt_date,
+        receipt_image_url=data.receipt_image_url,
+        status="pending"
+    )
+    db.add(receipt)
+    admins = db.query(User).filter(User.role == "admin").all()
+    for admin in admins:
+        create_notification(
+            db, admin.id, "receipt_submitted",
+            "🧾 New Receipt Submitted",
+            f"{student.display_name} submitted a receipt of {data.currency} {data.amount} for verification.",
+            "/admin?tab=reimbursements"
+        )
+    db.commit()
+    db.refresh(receipt)
+    return {"status": "receipt submitted", "receipt_id": str(receipt.id)}
+
+@app.get("/applications/{application_id}/receipts", response_model=List[dict])
+def get_application_receipts(
+    application_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    receipts = db.query(StudentReceipt).filter(
+        StudentReceipt.application_id == application_id
+    ).order_by(StudentReceipt.created_at.desc()).all()
+    return [{
+        "id": str(r.id),
+        "amount": float(r.amount),
+        "currency": r.currency,
+        "purpose": r.purpose,
+        "supplier_name": r.supplier_name,
+        "receipt_date": r.receipt_date.isoformat(),
+        "receipt_image_url": r.receipt_image_url,
+        "status": r.status,
+        "dispute_reason": r.dispute_reason,
+        "verified_at": r.verified_at.isoformat() if r.verified_at else None,
+        "created_at": r.created_at.isoformat(),
+    } for r in receipts]
+
+@app.get("/my-receipts", response_model=List[dict])
+def get_my_receipts(
+    current_user: User = Depends(require_student),
+    db: Session = Depends(get_db)
+):
+    student = db.query(StudentProfile).filter(StudentProfile.user_id == current_user.id).first()
+    if not student:
+        return []
+    receipts = db.query(StudentReceipt).filter(
+        StudentReceipt.student_id == student.id
+    ).order_by(StudentReceipt.created_at.desc()).all()
+    result = []
+    for r in receipts:
+        app_obj = db.query(Application).filter(Application.application_id == r.application_id).first()
+        project = db.query(Project).filter(Project.id == app_obj.project_id).first() if app_obj else None
+        result.append({
+            "id": str(r.id),
+            "application_id": str(r.application_id),
+            "project_name": project.project_name if project else "Unknown",
+            "amount": float(r.amount),
+            "currency": r.currency,
+            "purpose": r.purpose,
+            "supplier_name": r.supplier_name,
+            "receipt_date": r.receipt_date.isoformat(),
+            "receipt_image_url": r.receipt_image_url,
+            "status": r.status,
+            "dispute_reason": r.dispute_reason,
+            "created_at": r.created_at.isoformat(),
+        })
+    return result
+
+@app.get("/admin/receipts", response_model=List[dict])
+def get_all_receipts(
+    status_filter: Optional[str] = Query(None),
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    q = db.query(StudentReceipt)
+    if status_filter:
+        q = q.filter(StudentReceipt.status == status_filter)
+    receipts = q.order_by(StudentReceipt.created_at.desc()).all()
+    result = []
+    for r in receipts:
+        student = db.query(StudentProfile).filter(StudentProfile.id == r.student_id).first()
+        app_obj = db.query(Application).filter(Application.application_id == r.application_id).first()
+        project = db.query(Project).filter(Project.id == app_obj.project_id).first() if app_obj else None
+        ngo = db.query(NgoProfile).filter(NgoProfile.id == project.ngo_id).first() if project else None
+        result.append({
+            "id": str(r.id),
+            "application_id": str(r.application_id),
+            "student_name": student.display_name if student else "Unknown",
+            "student_reg": student.registration_number if student else "",
+            "project_name": project.project_name if project else "Unknown",
+            "ngo_name": ngo.organization_name if ngo else "Unknown",
+            "amount": float(r.amount),
+            "currency": r.currency,
+            "purpose": r.purpose,
+            "supplier_name": r.supplier_name,
+            "receipt_date": r.receipt_date.isoformat(),
+            "receipt_image_url": r.receipt_image_url,
+            "status": r.status,
+            "dispute_reason": r.dispute_reason,
+            "verified_at": r.verified_at.isoformat() if r.verified_at else None,
+            "created_at": r.created_at.isoformat(),
+        })
+    return result
+
+@app.patch("/admin/receipts/{receipt_id}/verify", response_model=dict)
+def verify_receipt(
+    receipt_id: uuid.UUID,
+    action: str = Query(..., pattern="^(approve|dispute)$"),
+    dispute_reason: Optional[str] = Query(None),
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    receipt = db.query(StudentReceipt).filter(StudentReceipt.id == receipt_id).first()
+    if not receipt:
+        raise HTTPException(status_code=404, detail="Receipt not found")
+    if receipt.status != "pending":
+        raise HTTPException(status_code=400, detail="Receipt already processed")
+    receipt.status = "verified" if action == "approve" else "disputed"
+    receipt.verified_by = current_user.id
+    receipt.verified_at = datetime.utcnow()
+    if action == "dispute":
+        if not dispute_reason:
+            raise HTTPException(status_code=400, detail="dispute_reason required")
+        receipt.dispute_reason = dispute_reason
+    student = db.query(StudentProfile).filter(StudentProfile.id == receipt.student_id).first()
+    if student:
+        if action == "approve":
+            create_notification(
+                db, student.user_id, "receipt_verified",
+                "✅ Receipt Verified",
+                f"Your receipt of {receipt.currency} {receipt.amount} for '{receipt.purpose}' has been verified.",
+                "/student?tab=receipts"
+            )
+        else:
+            create_notification(
+                db, student.user_id, "receipt_disputed",
+                "⚠️ Receipt Disputed",
+                f"Your receipt of {receipt.currency} {receipt.amount} was disputed: {dispute_reason}",
+                "/student?tab=receipts"
+            )
+    db.commit()
+    return {"status": receipt.status}
+
+@app.post("/admin/applications/{application_id}/reimbursement", response_model=dict, status_code=201)
+def create_reimbursement_obligation(
+    application_id: uuid.UUID,
+    due_date: str = Body(...),
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    app_obj = db.query(Application).filter(Application.application_id == application_id).first()
+    if not app_obj:
+        raise HTTPException(status_code=404, detail="Application not found")
+    existing = db.query(ReimbursementObligation).filter(
+        ReimbursementObligation.application_id == application_id
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Reimbursement obligation already exists")
+    verified_receipts = db.query(StudentReceipt).filter(
+        StudentReceipt.application_id == application_id,
+        StudentReceipt.status == "verified"
+    ).all()
+    if not verified_receipts:
+        raise HTTPException(status_code=400, detail="No verified receipts for this application")
+    total = sum(float(r.amount) for r in verified_receipts)
+    currency = verified_receipts[0].currency
+    from datetime import date as date_type
+    obligation = ReimbursementObligation(
+        application_id=application_id,
+        ngo_id=db.query(Project).filter(Project.id == app_obj.project_id).first().ngo_id,
+        student_id=app_obj.student_id,
+        total_verified_amount=total,
+        currency=currency,
+        due_date=date_type.fromisoformat(due_date),
+        status="pending"
+    )
+    db.add(obligation)
+    project = db.query(Project).filter(Project.id == app_obj.project_id).first()
+    ngo = db.query(NgoProfile).filter(NgoProfile.id == project.ngo_id).first() if project else None
+    student = db.query(StudentProfile).filter(StudentProfile.id == app_obj.student_id).first()
+    if ngo:
+        create_notification(
+            db, ngo.user_id, "reimbursement_created",
+            "💰 Reimbursement Obligation Created",
+            f"You owe {currency} {total:.2f} to {student.display_name if student else 'a student'} by {due_date}.",
+            "/ngo?tab=reimbursements"
+        )
+    if student:
+        create_notification(
+            db, student.user_id, "reimbursement_created",
+            "💰 Reimbursement Scheduled",
+            f"A reimbursement of {currency} {total:.2f} has been scheduled. Due: {due_date}.",
+            "/student?tab=receipts"
+        )
+    db.commit()
+    db.refresh(obligation)
+    return {"status": "obligation created", "obligation_id": str(obligation.id), "total": total}
+
+@app.get("/admin/reimbursements", response_model=List[dict])
+def get_all_reimbursements(
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    obligations = db.query(ReimbursementObligation).order_by(ReimbursementObligation.due_date).all()
+    result = []
+    for o in obligations:
+        app_obj = db.query(Application).filter(Application.application_id == o.application_id).first()
+        project = db.query(Project).filter(Project.id == app_obj.project_id).first() if app_obj else None
+        student = db.query(StudentProfile).filter(StudentProfile.id == o.student_id).first()
+        ngo = db.query(NgoProfile).filter(NgoProfile.id == o.ngo_id).first()
+        result.append({
+            "id": str(o.id),
+            "application_id": str(o.application_id),
+            "project_name": project.project_name if project else "Unknown",
+            "student_name": student.display_name if student else "Unknown",
+            "ngo_name": ngo.organization_name if ngo else "Unknown",
+            "total_verified_amount": float(o.total_verified_amount),
+            "currency": o.currency,
+            "due_date": o.due_date.isoformat(),
+            "status": o.status,
+            "payment_reference": o.payment_reference,
+            "payment_method": o.payment_method,
+            "student_confirmed": o.student_confirmed,
+            "settled_at": o.settled_at.isoformat() if o.settled_at else None,
+        })
+    return result
+
+@app.get("/my-reimbursements", response_model=List[dict])
+def get_my_reimbursements(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.role == "ngo":
+        ngo = db.query(NgoProfile).filter(NgoProfile.user_id == current_user.id).first()
+        if not ngo:
+            return []
+        obligations = db.query(ReimbursementObligation).filter(
+            ReimbursementObligation.ngo_id == ngo.id
+        ).order_by(ReimbursementObligation.due_date).all()
+    elif current_user.role == "student":
+        student = db.query(StudentProfile).filter(StudentProfile.user_id == current_user.id).first()
+        if not student:
+            return []
+        obligations = db.query(ReimbursementObligation).filter(
+            ReimbursementObligation.student_id == student.id
+        ).order_by(ReimbursementObligation.due_date).all()
+    else:
+        return []
+    result = []
+    for o in obligations:
+        app_obj = db.query(Application).filter(Application.application_id == o.application_id).first()
+        project = db.query(Project).filter(Project.id == app_obj.project_id).first() if app_obj else None
+        student = db.query(StudentProfile).filter(StudentProfile.id == o.student_id).first()
+        ngo = db.query(NgoProfile).filter(NgoProfile.id == o.ngo_id).first()
+        result.append({
+            "id": str(o.id),
+            "application_id": str(o.application_id),
+            "project_name": project.project_name if project else "Unknown",
+            "student_name": student.display_name if student else "Unknown",
+            "ngo_name": ngo.organization_name if ngo else "Unknown",
+            "total_verified_amount": float(o.total_verified_amount),
+            "currency": o.currency,
+            "due_date": o.due_date.isoformat(),
+            "status": o.status,
+            "payment_reference": o.payment_reference,
+            "payment_method": o.payment_method,
+            "student_confirmed": o.student_confirmed,
+            "settled_at": o.settled_at.isoformat() if o.settled_at else None,
+        })
+    return result
+
+@app.patch("/reimbursements/{obligation_id}/mark-paid", response_model=dict)
+def ngo_mark_paid(
+    obligation_id: uuid.UUID,
+    payment_reference: str = Body(...),
+    payment_method: str = Body(...),
+    current_user: User = Depends(require_ngo),
+    db: Session = Depends(get_db)
+):
+    ngo = db.query(NgoProfile).filter(NgoProfile.user_id == current_user.id).first()
+    obligation = db.query(ReimbursementObligation).filter(
+        ReimbursementObligation.id == obligation_id,
+        ReimbursementObligation.ngo_id == ngo.id
+    ).first()
+    if not obligation:
+        raise HTTPException(status_code=404, detail="Obligation not found")
+    if obligation.status != "pending":
+        raise HTTPException(status_code=400, detail="Already processed")
+    obligation.status = "paid_pending_confirmation"
+    obligation.payment_reference = payment_reference
+    obligation.payment_method = payment_method
+    student = db.query(StudentProfile).filter(StudentProfile.id == obligation.student_id).first()
+    if student:
+        create_notification(
+            db, student.user_id, "reimbursement_paid",
+            "💰 Payment Made — Please Confirm",
+            f"{ngo.organization_name} marked your reimbursement as paid via {payment_method} (ref: {payment_reference}). Please confirm receipt.",
+            "/student?tab=receipts"
+        )
+    db.commit()
+    return {"status": "paid_pending_confirmation"}
+
+@app.patch("/reimbursements/{obligation_id}/confirm", response_model=dict)
+def student_confirm_payment(
+    obligation_id: uuid.UUID,
+    current_user: User = Depends(require_student),
+    db: Session = Depends(get_db)
+):
+    student = db.query(StudentProfile).filter(StudentProfile.user_id == current_user.id).first()
+    obligation = db.query(ReimbursementObligation).filter(
+        ReimbursementObligation.id == obligation_id,
+        ReimbursementObligation.student_id == student.id
+    ).first()
+    if not obligation:
+        raise HTTPException(status_code=404, detail="Obligation not found")
+    if obligation.status != "paid_pending_confirmation":
+        raise HTTPException(status_code=400, detail="Not awaiting confirmation")
+    obligation.status = "settled"
+    obligation.student_confirmed = True
+    obligation.settled_at = datetime.utcnow()
+    app_obj = db.query(Application).filter(Application.application_id == obligation.application_id).first()
+    project = db.query(Project).filter(Project.id == app_obj.project_id).first() if app_obj else None
+    txn = AwardFundTransaction(
+        ngo_id=obligation.ngo_id,
+        student_id=obligation.student_id,
+        amount=obligation.total_verified_amount,
+        currency=obligation.currency,
+        transaction_type="reimbursement",
+        reference=obligation.payment_reference,
+        notes=f"Reimbursement for project: {project.project_name if project else str(obligation.application_id)}",
+        recorded_by=current_user.id
+    )
+    db.add(txn)
+    ngo = db.query(NgoProfile).filter(NgoProfile.id == obligation.ngo_id).first()
+    if ngo:
+        create_notification(
+            db, ngo.user_id, "reimbursement_confirmed",
+            "✅ Reimbursement Confirmed",
+            f"Student confirmed receipt of {obligation.currency} {obligation.total_verified_amount}. Transaction recorded.",
+            "/ngo?tab=reimbursements"
+        )
+    db.commit()
+    return {"status": "settled"}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ADOPTION FLOW
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/showcase", response_model=List[PersonalProjectPublic])
+def get_showcase(db: Session = Depends(get_db)):
+    return db.query(PersonalProject).filter(
+        PersonalProject.status == "showcase_approved"
+    ).order_by(PersonalProject.created_at.desc()).all()
+
+@app.post("/personal-projects/{project_id}/adopt", response_model=dict, status_code=201)
+def request_adoption(
+    project_id: uuid.UUID,
+    data: AdoptionRequestCreate,
+    current_user: User = Depends(require_ngo),
+    db: Session = Depends(get_db)
+):
+    ngo = db.query(NgoProfile).filter(NgoProfile.user_id == current_user.id).first()
+    if not ngo:
+        raise HTTPException(status_code=404, detail="NGO profile not found")
+    project = db.query(PersonalProject).filter(
+        PersonalProject.id == project_id,
+        PersonalProject.status == "showcase_approved"
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found or not in showcase")
+    existing = db.query(AdoptionRequest).filter(
+        AdoptionRequest.personal_project_id == project_id,
+        AdoptionRequest.ngo_id == ngo.id,
+        AdoptionRequest.status.in_(["pending", "approved"])
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="You already have a pending or approved adoption request for this project")
+    if not (1 <= data.adoption_level <= 3):
+        raise HTTPException(status_code=400, detail="Adoption level must be 1, 2, or 3")
+    req = AdoptionRequest(
+        personal_project_id=project_id,
+        ngo_id=ngo.id,
+        intended_use=data.intended_use,
+        deployment_scale=data.deployment_scale,
+        adoption_level=data.adoption_level,
+        compensation_offered=data.compensation_offered,
+        status="pending"
+    )
+    db.add(req)
+    student = db.query(StudentProfile).filter(StudentProfile.id == project.student_id).first()
+    if student:
+        create_notification(
+            db, student.user_id, "adoption_request",
+            "🤝 Adoption Request Received",
+            f"{ngo.organization_name} wants to adopt your project '{project.title}'. Admin is reviewing the request.",
+            "/student?tab=personal"
+        )
+    admins = db.query(User).filter(User.role == "admin").all()
+    for admin in admins:
+        create_notification(
+            db, admin.id, "adoption_request",
+            "🤝 New Adoption Request",
+            f"{ngo.organization_name} has submitted an adoption request for '{project.title}'.",
+            "/admin?tab=adoptions"
+        )
+    db.commit()
+    db.refresh(req)
+    return {"status": "adoption request submitted", "request_id": str(req.id)}
+
+@app.get("/admin/adoption-requests", response_model=List[dict])
+def get_adoption_requests(
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    requests = db.query(AdoptionRequest).order_by(AdoptionRequest.created_at.desc()).all()
+    result = []
+    for req in requests:
+        project = db.query(PersonalProject).filter(PersonalProject.id == req.personal_project_id).first()
+        ngo = db.query(NgoProfile).filter(NgoProfile.id == req.ngo_id).first()
+        student = db.query(StudentProfile).filter(StudentProfile.id == project.student_id).first() if project else None
+        agreement = db.query(AdoptionAgreement).filter(AdoptionAgreement.request_id == req.id).first()
+        result.append({
+            "id": str(req.id),
+            "project_id": str(req.personal_project_id),
+            "project_title": project.title if project else "Unknown",
+            "project_description": project.description if project else "",
+            "ngo_id": str(req.ngo_id),
+            "ngo_name": ngo.organization_name if ngo else "Unknown",
+            "student_name": student.display_name if student else "Unknown",
+            "student_reg": student.registration_number if student else "",
+            "intended_use": req.intended_use,
+            "deployment_scale": req.deployment_scale,
+            "adoption_level": req.adoption_level,
+            "compensation_offered": req.compensation_offered,
+            "status": req.status,
+            "admin_notes": req.admin_notes,
+            "created_at": req.created_at.isoformat(),
+            "has_agreement": agreement is not None,
+            "agreement_id": str(agreement.id) if agreement else None,
+            "student_signed": agreement.student_signed_at is not None if agreement else False,
+            "ngo_signed": agreement.ngo_signed_at is not None if agreement else False,
+            "admin_signed": agreement.admin_signed_at is not None if agreement else False,
+        })
+    return result
+
+@app.post("/admin/adoption-requests/{request_id}/agree", response_model=dict, status_code=201)
+def create_adoption_agreement(
+    request_id: uuid.UUID,
+    rights_granted_text: str = Body(...),
+    rights_excluded_text: str = Body(...),
+    credit_requirement: str = Body(...),
+    compensation_amount: float = Body(...),
+    payment_deadline: Optional[str] = Body(None),
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    req = db.query(AdoptionRequest).filter(AdoptionRequest.id == request_id).first()
+    if not req:
+        raise HTTPException(status_code=404, detail="Adoption request not found")
+    if req.status != "pending":
+        raise HTTPException(status_code=400, detail="Request is not pending")
+    existing = db.query(AdoptionAgreement).filter(AdoptionAgreement.request_id == request_id).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Agreement already exists for this request")
+    import random, string
+    ref = "ADOPT-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
+    from datetime import date as date_type
+    deadline = date_type.fromisoformat(payment_deadline) if payment_deadline else None
+    agreement = AdoptionAgreement(
+        request_id=request_id,
+        agreement_reference=ref,
+        adoption_level=req.adoption_level,
+        rights_granted_text=rights_granted_text,
+        rights_excluded_text=rights_excluded_text,
+        credit_requirement=credit_requirement,
+        compensation_amount=compensation_amount,
+        payment_deadline=deadline,
+    )
+    db.add(agreement)
+    req.status = "approved"
+    project = db.query(PersonalProject).filter(PersonalProject.id == req.personal_project_id).first()
+    ngo = db.query(NgoProfile).filter(NgoProfile.id == req.ngo_id).first()
+    student = db.query(StudentProfile).filter(StudentProfile.id == project.student_id).first() if project else None
+    if student:
+        create_notification(
+            db, student.user_id, "adoption_approved",
+            "🤝 Adoption Agreement Ready",
+            f"An adoption agreement has been created for your project '{project.title if project else ''}'. Please review and sign.",
+            "/student?tab=personal"
+        )
+    if ngo:
+        create_notification(
+            db, ngo.user_id, "adoption_approved",
+            "🤝 Adoption Agreement Ready",
+            f"Admin has approved your adoption request for '{project.title if project else ''}'. Please review and sign.",
+            "/ngo?tab=adoptions"
+        )
+    db.commit()
+    db.refresh(agreement)
+    return {"status": "agreement created", "agreement_id": str(agreement.id), "reference": ref}
+
+@app.patch("/adoption-agreements/{agreement_id}/sign", response_model=dict)
+def sign_adoption_agreement(
+    agreement_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    agreement = db.query(AdoptionAgreement).filter(AdoptionAgreement.id == agreement_id).first()
+    if not agreement:
+        raise HTTPException(status_code=404, detail="Agreement not found")
+    req = db.query(AdoptionRequest).filter(AdoptionRequest.id == agreement.request_id).first()
+    project = db.query(PersonalProject).filter(PersonalProject.id == req.personal_project_id).first() if req else None
+    now = datetime.utcnow()
+    if current_user.role == "student":
+        student = db.query(StudentProfile).filter(StudentProfile.user_id == current_user.id).first()
+        if not project or not student or project.student_id != student.id:
+            raise HTTPException(status_code=403, detail="Not your project")
+        if agreement.student_signed_at:
+            raise HTTPException(status_code=400, detail="Already signed")
+        agreement.student_signed_at = now
+    elif current_user.role == "ngo":
+        ngo = db.query(NgoProfile).filter(NgoProfile.user_id == current_user.id).first()
+        if not req or not ngo or req.ngo_id != ngo.id:
+            raise HTTPException(status_code=403, detail="Not your agreement")
+        if agreement.ngo_signed_at:
+            raise HTTPException(status_code=400, detail="Already signed")
+        agreement.ngo_signed_at = now
+    elif current_user.role == "admin":
+        if agreement.admin_signed_at:
+            raise HTTPException(status_code=400, detail="Already signed")
+        agreement.admin_signed_at = now
+        agreement.admin_signed_by = current_user.id
+    else:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    if agreement.student_signed_at and agreement.ngo_signed_at and agreement.admin_signed_at:
+        if req:
+            req.status = "fully_executed"
+        if project:
+            project.status = "adopted"
+        if project and req:
+            ngo = db.query(NgoProfile).filter(NgoProfile.id == req.ngo_id).first()
+            student = db.query(StudentProfile).filter(StudentProfile.id == project.student_id).first()
+            if student:
+                create_notification(
+                    db, student.user_id, "adoption_executed",
+                    "🎉 Adoption Agreement Fully Executed",
+                    f"All parties have signed. Your project '{project.title}' is now officially adopted!",
+                    "/student?tab=personal"
+                )
+    db.commit()
+    return {"status": "signed", "fully_executed": agreement.student_signed_at is not None and agreement.ngo_signed_at is not None and agreement.admin_signed_at is not None}
+
+@app.get("/my-adoption-requests", response_model=List[dict])
+def get_my_adoption_requests(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.role == "ngo":
+        ngo = db.query(NgoProfile).filter(NgoProfile.user_id == current_user.id).first()
+        if not ngo:
+            return []
+        requests = db.query(AdoptionRequest).filter(AdoptionRequest.ngo_id == ngo.id).order_by(AdoptionRequest.created_at.desc()).all()
+    elif current_user.role == "student":
+        student = db.query(StudentProfile).filter(StudentProfile.user_id == current_user.id).first()
+        if not student:
+            return []
+        project_ids = [p.id for p in db.query(PersonalProject).filter(PersonalProject.student_id == student.id).all()]
+        requests = db.query(AdoptionRequest).filter(AdoptionRequest.personal_project_id.in_(project_ids)).order_by(AdoptionRequest.created_at.desc()).all()
+    else:
+        return []
+    result = []
+    for req in requests:
+        project = db.query(PersonalProject).filter(PersonalProject.id == req.personal_project_id).first()
+        ngo = db.query(NgoProfile).filter(NgoProfile.id == req.ngo_id).first()
+        agreement = db.query(AdoptionAgreement).filter(AdoptionAgreement.request_id == req.id).first()
+        result.append({
+            "id": str(req.id),
+            "project_title": project.title if project else "Unknown",
+            "ngo_name": ngo.organization_name if ngo else "Unknown",
+            "intended_use": req.intended_use,
+            "deployment_scale": req.deployment_scale,
+            "adoption_level": req.adoption_level,
+            "compensation_offered": req.compensation_offered,
+            "status": req.status,
+            "created_at": req.created_at.isoformat(),
+            "agreement_id": str(agreement.id) if agreement else None,
+            "student_signed": agreement.student_signed_at is not None if agreement else False,
+            "ngo_signed": agreement.ngo_signed_at is not None if agreement else False,
+            "admin_signed": agreement.admin_signed_at is not None if agreement else False,
+            "agreement_reference": agreement.agreement_reference if agreement else None,
+            "compensation_amount": float(agreement.compensation_amount) if agreement else None,
+            "rights_granted_text": agreement.rights_granted_text if agreement else None,
+        })
+    return result
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # NOTIFICATIONS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1086,6 +1984,52 @@ def get_my_certificates(
         result.append(item)
     return result
 
+
+
+@app.get("/certificates/{cert_id}/pdf")
+def download_certificate_pdf(
+    cert_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    cert = db.query(Certificate).filter(Certificate.id == cert_id).first()
+    if not cert:
+        raise HTTPException(status_code=404, detail="Certificate not found")
+    # Verify ownership or admin
+    if current_user.role == "student":
+        student = db.query(StudentProfile).filter(StudentProfile.user_id == current_user.id).first()
+        if not student or cert.student_id != student.id:
+            raise HTTPException(status_code=403, detail="Not your certificate")
+    elif current_user.role not in ("admin", "super_admin"):
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    if not cert.pdf_url:
+        # Generate on-demand
+        student = db.query(StudentProfile).filter(StudentProfile.id == cert.student_id).first()
+        app_obj = db.query(Application).filter(Application.application_id == cert.related_id).first()
+        project = db.query(Project).filter(Project.id == app_obj.project_id).first() if app_obj else None
+        ngo = db.query(NgoProfile).filter(NgoProfile.id == project.ngo_id).first() if project else None
+        submission = db.query(WorkSubmission).filter(WorkSubmission.application_id == cert.related_id).first() if cert.related_id else None
+        outcome = db.query(ProjectOutcome).filter(ProjectOutcome.application_id == cert.related_id).first() if cert.related_id else None
+        pdf_bytes = generate_certificate_pdf(
+            student_name=student.display_name if student else "Student",
+            registration_number=student.registration_number if student else "",
+            project_name=project.project_name if project else "Project",
+            ngo_name=ngo.organization_name if ngo else "Organisation",
+            reference_number=cert.reference_number,
+            issued_at=cert.issued_at,
+            hours_worked=submission.hours_worked if submission else None,
+            outcome_summary=outcome.outcome_summary if outcome else None,
+        )
+        import base64
+        cert.pdf_url = "data:application/pdf;base64," + base64.b64encode(pdf_bytes).decode()
+        db.commit()
+    import base64
+    pdf_bytes = base64.b64decode(cert.pdf_url.split(",", 1)[1])
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=certificate-{cert.reference_number}.pdf"}
+    )
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # RECOMMENDATION LETTERS
@@ -2073,9 +3017,7 @@ def resolve_dispute(
     )
     return dispute
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# RECOMMENDATION LETTERS — ADMIN
-# ═══════════════════════════════════════════════════════════════════════════════
+
 
 @app.get("/letters/all", response_model=List[RecommendationRequestRead])
 def get_all_letter_requests(
@@ -2107,6 +3049,25 @@ def review_letter_request(
     letter.reviewed_at = datetime.utcnow()
     if pdf_url:
         letter.pdf_url = pdf_url
+    if action == "approved" and not letter.pdf_url:
+        student_obj = db.query(StudentProfile).filter(StudentProfile.id == letter.student_id).first()
+        admin_user = db.query(User).filter(User.id == current_user.id).first()
+        import random, string as slib, base64
+        ref = "LTR-" + "".join(random.choices(slib.ascii_uppercase + slib.digits, k=8))
+        try:
+            pdf_bytes = generate_letter_pdf(
+                student_name=student_obj.display_name if student_obj else "Student",
+                registration_number=student_obj.registration_number if student_obj else "",
+                project_name="DeKUT Innovation Hub Project",
+                ngo_name="DeKUT Innovation Hub",
+                letter_type=letter.purpose,
+                reference_number=ref,
+                issued_at=datetime.utcnow(),
+                admin_name=f"{admin_user.first_name} {admin_user.last_name}" if admin_user else "DekUT Admin",
+            )
+            letter.pdf_url = "data:application/pdf;base64," + base64.b64encode(pdf_bytes).decode()
+        except Exception as e:
+            print(f"Letter PDF error: {e}")
     db.commit()
     db.refresh(letter)
     student = db.query(StudentProfile).filter(
@@ -2120,6 +3081,34 @@ def review_letter_request(
             "/student?tab=letters"
         )
     return letter
+
+@app.get("/letters/{letter_id}/pdf")
+def download_letter_pdf(
+    letter_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    letter = db.query(RecommendationRequest).filter(RecommendationRequest.id == letter_id).first()
+    if not letter:
+        raise HTTPException(status_code=404, detail="Letter not found")
+    if current_user.role == "student":
+        student = db.query(StudentProfile).filter(StudentProfile.user_id == current_user.id).first()
+        if not student or letter.student_id != student.id:
+            raise HTTPException(status_code=403, detail="Not your letter")
+    elif current_user.role not in ("admin", "super_admin"):
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    if letter.status != "approved":
+        raise HTTPException(status_code=400, detail="Letter not yet approved")
+    if not letter.pdf_url:
+        raise HTTPException(status_code=404, detail="PDF not yet generated")
+    import base64
+    pdf_bytes = base64.b64decode(letter.pdf_url.split(",", 1)[1])
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=letter-{letter_id}.pdf"}
+    )
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # BOOTCAMPS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2196,6 +3185,28 @@ def verify_bootcamp(
     bootcamp.status = "approved"
     db.commit()
     return {"status": "verified"}
+
+@app.post("/bootcamps/{bootcamp_id}/attend", status_code=201)
+def register_bootcamp_attendance(
+    bootcamp_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.role != "student":
+        raise HTTPException(status_code=403, detail="Students only")
+    profile = db.query(StudentProfile).filter(StudentProfile.user_id == current_user.id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Student profile not found")
+    bootcamp = db.query(Bootcamp).filter(Bootcamp.id == bootcamp_id, Bootcamp.admin_verified == True).first()
+    if not bootcamp:
+        raise HTTPException(status_code=404, detail="Bootcamp not found or not verified")
+    existing = db.query(BootcampAttendance).filter(BootcampAttendance.bootcamp_id == bootcamp_id, BootcampAttendance.student_id == profile.id).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="Already registered for this bootcamp")
+    attendance = BootcampAttendance(bootcamp_id=bootcamp_id, student_id=profile.id)
+    db.add(attendance)
+    db.commit()
+    return {"message": "Registered successfully"}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -320,7 +320,7 @@ class NotificationSummary(BaseModel):
 
 class WorkSubmissionCreate(BaseModel):
     description: str
-    deliverable_url: Optional[str] = None
+    deliverable_url: str  # required — must be a link to the work
     hours_worked: Optional[int] = None
 
 class WorkSubmissionRead(BaseModel):
