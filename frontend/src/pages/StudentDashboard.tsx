@@ -261,7 +261,7 @@ const StudentDashboard = () => {
     } catch {}
   }
 
-  const hasApplied = (projectId: string) => applications.some(a => a.project_id === projectId)
+  const hasApplied = (projectId: string) => applications.find(a => a.project_id === projectId)
 
   const filteredProjects = projects.filter(p => {
     const matchSearch = !searchTerm ||
@@ -432,7 +432,7 @@ const StudentDashboard = () => {
                 }}
                 disabled={applying === project.id || hasApplied(project.id)}
                 style={{ ...btnPrimary, width: '100%', opacity: hasApplied(project.id) ? 0.7 : 1, background: hasApplied(project.id) ? 'rgba(0,166,81,0.1)' : 'linear-gradient(135deg,#0A6EBD,#0891D4)', border: hasApplied(project.id) ? '1px solid rgba(0,166,81,0.25)' : 'none', color: hasApplied(project.id) ? '#4ADE80' : 'white' }}>
-                {applying === project.id ? '⏳ Applying...' : hasApplied(project.id) ? '✓ Applied' : 'Apply Now →'}
+                {applying === project.id ? '⏳ Applying...' : hasApplied(project.id) ? (() => { const status = hasApplied(project.id)?.status; if (status === 'officially_complete' || status === 'completed') return '🏆 Completed'; if (status === 'pending_certificate') return '🎓 Certificate Pending'; if (status === 'work_submitted') return '📋 Work Submitted'; if (status === 'selected') return '✓ Selected'; if (status === 'rejected') return '✗ Rejected'; return '✓ Applied'; })() : 'Apply Now →'}
               </button>
             </div>
           ))}
