@@ -1,6 +1,11 @@
 from fpdf import FPDF
 import os, io, base64
 from datetime import datetime
+from jinja2 import Environment, FileSystemLoader
+import os
+
+# Template engine
+_template_env = Environment(loader=FileSystemLoader(os.path.join(os.path.dirname(__file__), '..', 'templates')))
 
 BRAND_GREEN  = (0, 166, 81)
 BRAND_BLUE   = (10, 110, 189)
@@ -179,18 +184,14 @@ def generate_letter_pdf(
     if custom_body:
         body = custom_body
     else:
-        body = (
-            f"This letter serves as a formal recommendation for {student_name} "
-            f"(Registration Number: {registration_number}), a student at Dedan Kimathi University of Technology.\n\n"
-            f"{student_name} successfully participated in the project \"{project_name}\" organised through the "
-            f"DekUT Innovation Hub in collaboration with {ngo_name}. Throughout this engagement, the student "
-            f"demonstrated exceptional commitment, technical competency, and a collaborative spirit.\n\n"
-            f"This recommendation is issued in the context of: {letter_type_label}.\n\n"
-            f"We at the DekUT Innovation Hub are pleased to recommend {student_name} without reservation and "
-            f"are confident they will bring the same dedication and professionalism to future endeavours.\n\n"
-            f"Should you require any further information, please do not hesitate to contact us through the "
-            f"DekUT Innovation Hub portal."
-        )
+        template = _template_env.get_template("recommendation_letter.txt")
+        body = template.render(
+            student_name=student_name,
+            registration_number=registration_number,
+            project_name=project_name,
+            ngo_name=ngo_name,
+            letter_type_label=letter_type_label
+        ).strip()
 
     pdf.set_font("Helvetica", "", 10)
     pdf.set_text_color(*LIGHT_TEXT)

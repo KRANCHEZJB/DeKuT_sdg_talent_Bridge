@@ -1,0 +1,11 @@
+It is with great distinction and unequivocal confidence that I write to formally recommend {{ student_name }} (Registration Number: {{ registration_number }}), a student of Dedan Kimathi University of Technology (DeKUT), for the purpose of {{ letter_type_label }}.
+
+{{ student_name }} earned selection into the highly competitive project "{{ project_name }}", implemented in collaboration with {{ ngo_name }} under the auspices of the DeKUT Innovation Hub - an initiative dedicated to advancing student engagement in real-world, impact-driven environments aligned with the United Nations Sustainable Development Goals.
+
+Throughout the duration of this engagement, {{ student_name }} consistently demonstrated exceptional intellectual discipline, technical proficiency, and professional integrity. The student exhibited a remarkable capacity for independent analytical reasoning, effective collaboration within multidisciplinary teams, and a sustained commitment to excellence in execution.
+
+The demands of the project extended beyond technical competency, requiring adaptability, critical thinking, and accountability under dynamic conditions. {{ student_name }} met and exceeded these expectations with notable maturity and consistency, contributing meaningfully to both the technical outcomes and the broader social impact objectives of the initiative.
+
+In light of these accomplishments, I recommend {{ student_name }} in the strongest possible terms. I am confident that any institution or organisation will find in this individual a principled, capable, and forward-thinking professional of exceptional promise.
+
+Should further information be required, I would be pleased to provide additional insight through the DeKUT Innovation Hub.
