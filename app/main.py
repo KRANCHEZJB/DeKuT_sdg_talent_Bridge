@@ -3130,10 +3130,30 @@ def download_letter_pdf(
         raise HTTPException(status_code=403, detail="Unauthorized")
     if letter.status != "approved":
         raise HTTPException(status_code=400, detail="Letter not yet approved")
-    if not letter.pdf_url:
-        raise HTTPException(status_code=404, detail="PDF not yet generated")
     import base64
-    pdf_bytes = base64.b64decode(letter.pdf_url.split(",", 1)[1])
+    if not letter.pdf_url:
+        # Regenerate PDF on the fly
+        student = db.query(StudentProfile).filter(StudentProfile.id == letter.student_id).first()
+        app_obj = db.query(Application).filter(
+            Application.student_id == letter.student_id,
+            Application.status.in_(["officially_complete", "completed"])
+        ).first()
+        project = db.query(Project).filter(Project.id == app_obj.project_id).first() if app_obj else None
+        ngo = db.query(NgoProfile).filter(NgoProfile.id == project.ngo_id).first() if project else None
+        from app.pdf_generator import generate_letter_pdf
+        pdf_bytes = generate_letter_pdf(
+            student_name=student.display_name if student else "Student",
+            registration_number=student.registration_number if student else "",
+            project_name=project.project_name if project else "SDG Project",
+            ngo_name=ngo.organization_name if ngo else "Partner Organisation",
+            letter_type=letter.purpose,
+            reference_number=str(letter.id)[:8].upper(),
+            issued_at=letter.created_at,
+        )
+        letter.pdf_url = "data:application/pdf;base64," + base64.b64encode(pdf_bytes).decode()
+        db.commit()
+    else:
+        pdf_bytes = base64.b64decode(letter.pdf_url.split(",", 1)[1])
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",

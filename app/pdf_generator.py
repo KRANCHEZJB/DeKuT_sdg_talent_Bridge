@@ -167,6 +167,7 @@ def generate_letter_pdf(
     custom_body: str = None,
 ) -> bytes:
     pdf = _base_pdf(landscape=False)
+    pdf.set_margins(20, 10, 20)
     _decorative_border(pdf, BRAND_BLUE)
     _header_block(pdf, "RECOMMENDATION LETTER")
 
@@ -180,7 +181,7 @@ def generate_letter_pdf(
     pdf.cell(0, 6, "To Whom It May Concern,", ln=True)
     pdf.ln(4)
 
-    letter_type_label = letter_type.replace("_", " ").title()
+    letter_type_label = letter_type.replace("_", " ")
     if custom_body:
         body = custom_body
     else:
